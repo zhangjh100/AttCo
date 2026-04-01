@@ -65,7 +65,7 @@ if __name__=="__main__":
                             help='validation batch size')
         parser.add_argument('--is_thop', type=bool, default=True,
                             help='whether calculate FLOPs/Params (Thop)')                     
-        parser.add_argument('--path_image', type=str, default="/home/ssd_0/Phuong/MultimodalSegmentation/dataset/MICCAI_BraTS2020_TrainingData",
+        parser.add_argument('--path_image', type=str, default="/mnt/data1/zhangjh/datasets/multimodal/BraTS2020/MICCAI_BraTS2020_TrainingData",
                             help='')
         parser.add_argument('--pretrained', type=str, default=None, 
                             help='')  
@@ -79,7 +79,8 @@ if __name__=="__main__":
         np.random.seed(100)
         torch.manual_seed(100)
 
-        device = torch.device('cuda:0') if torch.cuda.is_available else torch.device('cpu')
+        device = torch.device('cuda:1') if torch.cuda.is_available else torch.device('cpu')
+        # device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 
         if arg.modelname == "AttCo":
