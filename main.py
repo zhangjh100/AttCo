@@ -195,7 +195,7 @@ if __name__=="__main__":
                 if os.path.exists(filename):
                     os.remove(filename)    
                 
-                filename = "./checkpoint/{}/{}/Fold_{}_bs_{}_TC_{}_ED_{}_ET_{}_WT_{}.pt".format(arg.dataname, arg.modelname, fold, arg.train_batch_size, dice_val[0], dice_val[1], dice_val[2], dice_val[3])
+                filename = "/mnt/data1/zhangjh/AttCo/checkpoint/{}/{}/Fold_{}_bs_{}_TC_{}_ED_{}_ET_{}_WT_{}.pt".format(arg.dataname, arg.modelname, fold, arg.train_batch_size, dice_val[0], dice_val[1], dice_val[2], dice_val[3])
                 torch.save(model, filename)
                 print("Saving model: ", filename)
             print("Epoch: {} | Loss_train: {:.04f} | Dice_TC: {:.04f} | Dice_ED: {:.04f} | Dice_ET {:.04f} | Dice_WT: {:.04f}".format(epoch, loss_train, dice_train[0], dice_train[1], dice_train[2], dice_train[3]))
@@ -205,7 +205,7 @@ if __name__=="__main__":
             # Save log
             log_data_frame = np.asarray(log_data)
             log_data_frame = pd.DataFrame(log_data_frame, columns=[['Epoch', 'Loss_train', 'Dice_TC_train', 'Dice_ED_train', 'Dice_ET_train', 'Dice_WT_train', 'Loss_val', 'Dice_TC_val', 'Dice_ED_val', 'Dice_ET_val', 'Dice_WT_val']])
-            log_data_frame.to_csv("./checkpoint/{}/{}/log_train_BraTS2020_fold_{}_bs_{}.csv".format(arg.dataname, arg.modelname, fold, arg.train_batch_size), index=False)
+            log_data_frame.to_csv("/mnt/data1/zhangjh/AttCo/checkpoint/{}/{}/log_train_BraTS2020_fold_{}_bs_{}.csv".format(arg.dataname, arg.modelname, fold, arg.train_batch_size), index=False)
                 
 
             
