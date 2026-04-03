@@ -112,8 +112,8 @@ if __name__=="__main__":
         }
         ##############################################################################
         print(arg.modelname)
-        model = torch.nn.DataParallel(model)
-        # model.to(device)
+        # model = torch.nn.DataParallel(model)
+        model.to(device)
         
         ### Load pretrained model###########################################
         if arg.pretrained is not None:
