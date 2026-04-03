@@ -79,8 +79,8 @@ if __name__=="__main__":
         np.random.seed(100)
         torch.manual_seed(100)
 
-        device = torch.device('cuda:1') if torch.cuda.is_available else torch.device('cpu')
-        # device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+        # device = torch.device('cuda:1') if torch.cuda.is_available else torch.device('cpu')
+        device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 
         if arg.modelname == "AttCo":
@@ -112,8 +112,8 @@ if __name__=="__main__":
         }
         ##############################################################################
         print(arg.modelname)
-        # model = torch.nn.DataParallel(model)
-        model.to(device)
+        model = torch.nn.DataParallel(model)
+        # model.to(device)
         
         ### Load pretrained model###########################################
         if arg.pretrained is not None:
