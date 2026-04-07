@@ -348,6 +348,7 @@ class AttCo(nn.Module):
     def forward(self, x):
         flair, t1, t1ce, t2 = x[:, :1, :, :, :],x[:, 1:2, :, :, :], x[:, 2:3, :, :, :],x[:, 3:, :, :, :]
         x_in1, x_in2 = torch.cat((t1, t1ce), dim=1), torch.cat((flair, t2), dim=1)
+        # x_in1, x_in2 = torch.cat((t1, flair), dim=1), torch.cat((t1ce, t2), dim=1)
         # encoding path
         h_out_1 = self.encoder1(x_in1)
         h_out_2 = self.encoder2(x_in2)
