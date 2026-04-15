@@ -466,7 +466,7 @@ class WaveCo(nn.Module):
 
         # self.unimodalInteraction = intraInteraction(16 * baseChannel, input_size=(8, 8, 8))
         # self.crossInteraction = CrossAttention(16 * baseChannel, input_size=(8, 8, 8))
-        self.fusion = WaveletBlock3D(self, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
+        self.fusion = WaveletBlock3D(c=baseChannel, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
 
         # decoder
         self.Up5 = up_conv(ch_in=baseChannel * 16 * 4, ch_out=baseChannel * 8)
