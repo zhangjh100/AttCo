@@ -340,7 +340,10 @@ class WaveCo(nn.Module):
         self.encoder1 = Encoder(inChannel=inChannel, baseChannel=baseChannel)
         self.encoder2 = Encoder(inChannel=inChannel, baseChannel=baseChannel)
 
-        self.fusion = WaveletBlock3D(c=baseChannel*2, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
+        self.fusion1 = WaveletBlock3D(c=baseChannel * 2, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
+        self.fusion2 = WaveletBlock3D(c=baseChannel * 4, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
+        self.fusion3 = WaveletBlock3D(c=baseChannel * 8, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
+        self.fusion4 = WaveletBlock3D(c=baseChannel * 16, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
 
         # decoder
         self.Up5 = up_conv(ch_in=baseChannel * 8 * 4, ch_out=baseChannel * 8)
@@ -370,10 +373,10 @@ class WaveCo(nn.Module):
         x3 = torch.cat((h_out_1[2], h_out_2[2]), dim=1)
         x4 = torch.cat((h_out_1[3], h_out_2[3]), dim=1)
 
-        x1 = self.fusion(x1)
-        x2 = self.fusion(x2)
-        x3 = self.fusion(x3)
-        x4 = self.fusion(x4)
+        x1 = self.fusion1(x1)
+        x2 = self.fusion2(x2)
+        x3 = self.fusion3(x3)
+        x4 = self.fusion4(x4)
         # x5 = torch.cat((h_out_1[4], h_out_2[4]), dim=1)
         # print(h_out_1[4].shape)
         # h11, h22 = self.unimodalInteraction(h_out_1[4], h_out_2[4])
