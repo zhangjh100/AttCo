@@ -274,7 +274,7 @@ class WaveletBlock3D(nn.Module):
         super().__init__()
         dw_channel = c * 8
         self.wavelet_block1 = LWN3D(c, wavelet='sym2', initialize=True)
-        self.norm_after_wavelet = LayerNorm3d(dw_channel // 2)
+        self.norm_after_wavelet = LayerNorm3d(dw_channel)
 
         self.upsample = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False)
 
@@ -378,7 +378,7 @@ class WaveCo(nn.Module):
         # print(h_out_1[4].shape)
         # h11, h22 = self.unimodalInteraction(h_out_1[4], h_out_2[4])
         # h12, h21 = self.crossInteraction(h_out_1[4], h_out_2[4])
-        x5 = torch.cat((h_out_1[3], h_out_2[3]), dim=1)
+        x5 = torch.cat((h_out_1[4], h_out_2[4]), dim=1)
         # x5 = torch.cat((h11, h12, h21, h22), dim=1)
 
         # decoding + concat path
