@@ -56,7 +56,7 @@ if __name__ == "__main__":
         # -------------------------- 1. 调整默认batch size（两卡建议翻倍） --------------------------
         parser.add_argument('--epochs', type=int, default=400, help='epoch number')
         parser.add_argument('--lrate', type=float, default=0.002, help='learning rate（batch翻倍，学习率可选翻倍）')
-        parser.add_argument('--train_batch_size', type=int, default=6, help='training batch size（原2→两卡改4）')
+        parser.add_argument('--train_batch_size', type=int, default=4, help='training batch size（原2→两卡改4）')
         parser.add_argument('--val_batch_size', type=int, default=2, help='validation batch size')
         parser.add_argument('--is_thop', type=bool, default=True, help='whether calculate FLOPs/Params (Thop)')
         parser.add_argument('--path_image', type=str,
