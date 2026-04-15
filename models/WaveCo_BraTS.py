@@ -347,13 +347,13 @@ class WaveCo(nn.Module):
 
         # decoder
         self.Up5 = up_conv(ch_in=baseChannel * 8 * 4, ch_out=baseChannel * 8)
-        self.Up_conv5 = BasicBlock(baseChannel * 10, baseChannel * 8, stride=1, downsample=True)
+        self.Up_conv5 = BasicBlock(baseChannel * 24, baseChannel * 8, stride=1, downsample=True)
 
         self.Up4 = up_conv(ch_in=baseChannel * 8, ch_out=baseChannel * 4)
-        self.Up_conv4 = BasicBlock(baseChannel * 8, baseChannel * 4, stride=1, downsample=True)
+        self.Up_conv4 = BasicBlock(baseChannel * 12, baseChannel * 4, stride=1, downsample=True)
 
         self.Up3 = up_conv(ch_in=baseChannel * 4, ch_out=baseChannel * 2)
-        self.Up_conv3 = BasicBlock(baseChannel * 4, baseChannel * 2, stride=1, downsample=True)
+        self.Up_conv3 = BasicBlock(baseChannel * 6, baseChannel * 2, stride=1, downsample=True)
 
         self.Up2 = up_conv(ch_in=baseChannel * 2, ch_out=baseChannel)
         self.Up_conv2 = BasicBlock(baseChannel * 3, baseChannel, stride=1, downsample=True)
