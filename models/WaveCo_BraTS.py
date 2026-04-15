@@ -275,6 +275,8 @@ class WaveletBlock3D(nn.Module):
         dw_channel = c * DW_Expand
         self.wavelet_block1 = LWN3D(c, wavelet='sym2', initialize=True)
 
+        self.upsample = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False)
+
         self.conv3 = nn.Conv3d(
             in_channels=dw_channel, out_channels=c,
             kernel_size=1, padding=0, stride=1, groups=1, bias=True
@@ -306,6 +308,8 @@ class WaveletBlock3D(nn.Module):
         x = inp
         x = self.norm1(x)
         x = self.wavelet_block1(x)  # 输出 8倍通道
+
+        x = self.upsample(x)
 
         x = x * self.sca(x)
         x = self.conv3(x)
