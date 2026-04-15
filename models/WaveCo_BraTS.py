@@ -90,8 +90,8 @@ class BasicBlock(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = conv3x3x3(planes, planes)
         self.bn2 = nn.BatchNorm3d(planes)
-        self.downsample = downsample
-        if downsample is not None:
+        self.downsample = None
+        if downsample or inplanes != planes or stride != 1:
             self.downsample = nn.Sequential(
                 nn.Conv3d(inplanes, planes, kernel_size=1, stride=stride, bias=False),
                 nn.BatchNorm3d(planes),
@@ -165,93 +165,6 @@ class Encoder(nn.Module):
         x5 = self.Maxpool(x4)
         x5 = self.Conv5(x5)
         return x1, x2, x3, x4, x5
-
-
-class SEAttention(nn.Module):
-    def __init__(self, hidden_size, input_size, num_memory_units=64):
-        super(SEAttention, self).__init__()
-        self.size = input_size
-        self.num_attention_heads = 8
-        self.attention_head_size = int(hidden_size / self.num_attention_heads)
-        self.all_head_size = self.num_attention_heads * self.attention_head_size
-
-        # Self Attention
-        self.query = nn.Linear(hidden_size, self.all_head_size)
-        self.key = nn.Linear(hidden_size, self.all_head_size)
-        self.value = nn.Linear(hidden_size, self.all_head_size)
-
-        self.out = nn.Linear(hidden_size, hidden_size)
-
-        self.softmax = nn.Softmax(dim=-1)
-        # External Attention
-        self.memory_key = nn.Linear(hidden_size // self.num_attention_heads, num_memory_units)
-        self.memory_value = nn.Linear(num_memory_units, hidden_size // self.num_attention_heads)
-        self.proj = nn.Linear(hidden_size, hidden_size)
-
-        # Output combination
-        self.conv = nn.Conv3d(hidden_size * 2, hidden_size, kernel_size=1, stride=1, padding=0)
-
-    def transpose_for_scores(self, x):
-        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        # print(x.shape, new_x_shape, x.size()[:-1])
-        x = x.view(*new_x_shape)
-        # print(x.shape, x.permute(0, 2, 1, 3).shape)
-        return x.permute(0, 2, 1, 3)
-
-    def forward(self, hidden_states):
-        hidden_states = hidden_states.flatten(2)  # (batchsize, hidden_size, d*h*w)
-        hidden_states = hidden_states.transpose(-1, -2)  # (batchsize, n_patches, hidden_size)
-
-        mixed_query_layer = self.query(hidden_states)
-        # Self Attention
-        mixed_key_layer = self.key(hidden_states)
-        mixed_value_layer = self.value(hidden_states)
-
-        query_layer = self.transpose_for_scores(mixed_query_layer)
-        key_layer = self.transpose_for_scores(mixed_key_layer)
-        value_layer = self.transpose_for_scores(mixed_value_layer)
-
-        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
-        attention_probs = self.softmax(attention_scores)
-
-        context_layer = torch.matmul(attention_probs, value_layer)
-        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-        context_layer = context_layer.view(*new_context_layer_shape)
-        attention_output = self.out(context_layer)
-
-        shape = attention_output.shape
-        attention_output = attention_output.permute(0, 2, 1)
-        self_attention_output = attention_output.view((shape[0], shape[2]) + self.size)
-
-        # External Attention
-        attn = self.memory_key(query_layer)
-        attn = attn.softmax(dim=2)
-        attn = attn / (1e-9 + attn.sum(dim=-1, keepdim=True))
-        out = self.memory_value(attn)
-        out = rearrange(out, 'b h n c -> b n (h c)')
-        out = self.proj(out)
-
-        shape = out.shape
-        out = out.permute(0, 2, 1)
-        external_attention_output = out.view((shape[0], shape[2]) + self.size)
-
-        #
-        attention_output = self.conv(torch.cat((self_attention_output, external_attention_output), dim=1))
-        return attention_output
-
-
-class intraInteraction(nn.Module):
-    def __init__(self, hidden, input_size=(4, 4, 4)):
-        super(intraInteraction, self).__init__()
-        self.attention1 = SEAttention(hidden, input_size=input_size)
-        self.attention2 = SEAttention(hidden, input_size=input_size)
-
-    def forward(self, x1, x2):
-        h1 = self.attention1(x1)
-        h2 = self.attention2(x2)
-        return h1, h2
 
 
 class LayerNormFunction(torch.autograd.Function):
@@ -333,14 +246,15 @@ class LWN3D(nn.Module):
 
         self.kernel = torch.cat(kernels, dim=0)
         self.kernel = self.kernel.repeat(channels, 1, 1, 1, 1)  # [C*8, 1, Kd, Kh, Kw]
-        self.kernel = nn.Parameter(self.kernel, requires_grad=initialize)
+        self.kernel = nn.Parameter(self.kernel.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu')), requires_grad=initialize)
 
     def forward(self, x):
         """
         输入 x: [B, C, D, H, W]
         输出: [B, C*8, D//2, H//2, W//2] → 8个子带拼接在通道维度
         """
-        padding = (self.kernel.shape[2] - 1) // 2
+        kernel_size = self.kernel.shape[2:]
+        padding = tuple((k - 1) // 2 for k in kernel_size)
 
         # 3D 分组小波卷积 (groups=C → 每个通道独立8个子带小波变换)
         out = F.conv3d(
@@ -411,82 +325,6 @@ class WaveletBlock3D(nn.Module):
 
         return y + x * self.gamma
 
-class CrossAttention(nn.Module):
-    def __init__(self, hidden_size, input_size=(4, 4, 4)):
-        super(CrossAttention, self).__init__()
-        self.size = input_size
-        self.num_attention_heads = 8
-        self.attention_head_size = int(hidden_size / self.num_attention_heads)
-        self.all_head_size = self.num_attention_heads * self.attention_head_size
-
-        self.query = nn.Linear(hidden_size, self.all_head_size)
-        self.key = nn.Linear(hidden_size, self.all_head_size)
-        self.value1 = nn.Linear(hidden_size, self.all_head_size)
-        self.value2 = nn.Linear(hidden_size, self.all_head_size)
-
-        self.out1 = nn.Linear(hidden_size, hidden_size)
-        self.out2 = nn.Linear(hidden_size, hidden_size)
-
-        # self.conv1 = single_conv(hidden_size, hidden_size, kernel_size=1, stride=1, padding=0)
-        # self.conv2 = single_conv(hidden_size, hidden_size, kernel_size=1, stride=1, padding=0)
-        self.softmax1 = nn.Softmax(dim=-2)
-        self.softmax2 = nn.Softmax(dim=-1)
-
-    def transpose_for_scores(self, x):
-        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
-        # print(x.shape, new_x_shape, x.size()[:-1])
-        x = x.view(*new_x_shape)
-        # print(x.shape, x.permute(0, 2, 1, 3).shape)
-        return x.permute(0, 2, 1, 3)
-
-    def forward(self, x1, x2):
-        hidden_states_1 = x1.flatten(2)  # (batchsize, hidden_size, patch size h * patch size w)
-        hidden_states_1 = hidden_states_1.transpose(-1, -2)  # (batchsize, n_patches, hidden_size)
-
-        hidden_states_2 = x2.flatten(2)  # (batchsize, hidden_size, patch size h * patch size w)
-        hidden_states_2 = hidden_states_2.transpose(-1, -2)  # (batchsize, n_patches, hidden_size)
-
-        mixed_query_layer = self.query(hidden_states_1)
-        mixed_key_layer = self.key(hidden_states_2)
-        mixed_value_layer_1 = self.value1(hidden_states_1)
-        mixed_value_layer_2 = self.value2(hidden_states_2)
-
-        query_layer = self.transpose_for_scores(mixed_query_layer)
-        key_layer = self.transpose_for_scores(mixed_key_layer)
-        value_layer_1 = self.transpose_for_scores(mixed_value_layer_1)
-        value_layer_2 = self.transpose_for_scores(mixed_value_layer_2)
-
-        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
-        attention_probs_1 = self.softmax1(attention_scores)
-        attention_probs_2 = self.softmax2(attention_scores).transpose(-1, -2)
-        ###
-        context_layer1 = torch.matmul(attention_probs_1, value_layer_1)
-        context_layer1 = context_layer1.permute(0, 2, 1, 3).contiguous()
-        new_context_layer_shape = context_layer1.size()[:-2] + (self.all_head_size,)
-        context_layer1 = context_layer1.view(*new_context_layer_shape)
-        attention_output_1 = self.out1(context_layer1)
-
-        shape = attention_output_1.shape
-        attention_output_1 = attention_output_1.permute(0, 2, 1)
-        attention_output_1 = attention_output_1.view((shape[0], shape[2]) + self.size)
-        ###
-        context_layer2 = torch.matmul(attention_probs_2, value_layer_2)
-        context_layer2 = context_layer2.permute(0, 2, 1, 3).contiguous()
-        new_context_layer_shape = context_layer2.size()[:-2] + (self.all_head_size,)
-        context_layer2 = context_layer2.view(*new_context_layer_shape)
-        attention_output_2 = self.out2(context_layer2)
-
-        shape = attention_output_2.shape
-        attention_output_2 = attention_output_2.permute(0, 2, 1)
-        attention_output_2 = attention_output_2.view((shape[0], shape[2]) + self.size)
-        ####
-        attention_output_1 = attention_output_1 + x1
-        attention_output_2 = attention_output_2 + x2
-        # print(attention_output_1.shape, hidden_states_1.shape)
-        return attention_output_1, attention_output_2
-
-
 class WaveCo(nn.Module):
     """
     """
@@ -496,19 +334,17 @@ class WaveCo(nn.Module):
         self.encoder1 = Encoder(inChannel=inChannel, baseChannel=baseChannel)
         self.encoder2 = Encoder(inChannel=inChannel, baseChannel=baseChannel)
 
-        # self.unimodalInteraction = intraInteraction(16 * baseChannel, input_size=(8, 8, 8))
-        # self.crossInteraction = CrossAttention(16 * baseChannel, input_size=(8, 8, 8))
-        self.fusion = WaveletBlock3D(c=baseChannel, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
+        self.fusion = WaveletBlock3D(c=baseChannel*2, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
 
         # decoder
-        self.Up5 = up_conv(ch_in=baseChannel * 16 * 4, ch_out=baseChannel * 8)
-        self.Up_conv5 = BasicBlock(baseChannel * 24, baseChannel * 8, stride=1, downsample=True)
+        self.Up5 = up_conv(ch_in=baseChannel * 8 * 4, ch_out=baseChannel * 8)
+        self.Up_conv5 = BasicBlock(baseChannel * 10, baseChannel * 8, stride=1, downsample=True)
 
         self.Up4 = up_conv(ch_in=baseChannel * 8, ch_out=baseChannel * 4)
-        self.Up_conv4 = BasicBlock(baseChannel * 12, baseChannel * 4, stride=1, downsample=True)
+        self.Up_conv4 = BasicBlock(baseChannel * 8, baseChannel * 4, stride=1, downsample=True)
 
         self.Up3 = up_conv(ch_in=baseChannel * 4, ch_out=baseChannel * 2)
-        self.Up_conv3 = BasicBlock(baseChannel * 6, baseChannel * 2, stride=1, downsample=True)
+        self.Up_conv3 = BasicBlock(baseChannel * 4, baseChannel * 2, stride=1, downsample=True)
 
         self.Up2 = up_conv(ch_in=baseChannel * 2, ch_out=baseChannel)
         self.Up_conv2 = BasicBlock(baseChannel * 3, baseChannel, stride=1, downsample=True)
