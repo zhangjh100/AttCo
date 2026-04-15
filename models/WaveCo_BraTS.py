@@ -63,7 +63,7 @@ class up_conv(nn.Module):
     def __init__(self, ch_in, ch_out, scale_factor=2):
         super(up_conv, self).__init__()
         self.up = nn.Sequential(
-            nn.Upsample(scale_factor=scale_factor),
+            nn.Upsample(scale_factor=scale_factor, mode='trilinear', align_corners=False),
             nn.Conv3d(ch_in, ch_out, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm3d(ch_out),
             nn.ReLU(inplace=True)
@@ -272,8 +272,9 @@ class LWN3D(nn.Module):
 class WaveletBlock3D(nn.Module):
     def __init__(self, c, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.):
         super().__init__()
-        dw_channel = c * DW_Expand
+        dw_channel = c * 8
         self.wavelet_block1 = LWN3D(c, wavelet='sym2', initialize=True)
+        self.norm_after_wavelet = LayerNorm3d(dw_channel)
 
         self.upsample = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False)
 
@@ -308,6 +309,7 @@ class WaveletBlock3D(nn.Module):
         x = inp
         x = self.norm1(x)
         x = self.wavelet_block1(x)  # 输出 8倍通道
+        x = self.norm_after_wavelet(x)
 
         x = self.upsample(x)
 
