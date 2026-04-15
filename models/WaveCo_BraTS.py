@@ -274,7 +274,7 @@ class WaveletBlock3D(nn.Module):
         super().__init__()
         dw_channel = c * 8
         self.wavelet_block1 = LWN3D(c, wavelet='sym2', initialize=True)
-        self.norm_after_wavelet = LayerNorm3d(dw_channel)
+        self.norm_after_wavelet = LayerNorm3d(dw_channel // 2)
 
         self.upsample = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=False)
 
