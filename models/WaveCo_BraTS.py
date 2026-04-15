@@ -246,7 +246,7 @@ class LWN3D(nn.Module):
 
         self.kernel = torch.cat(kernels, dim=0)
         self.kernel = self.kernel.repeat(channels, 1, 1, 1, 1)  # [C*8, 1, Kd, Kh, Kw]
-        self.kernel = nn.Parameter(self.kernel.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu')), requires_grad=initialize)
+        self.kernel = nn.Parameter(self.kernel, requires_grad=initialize)
 
     def forward(self, x):
         """
