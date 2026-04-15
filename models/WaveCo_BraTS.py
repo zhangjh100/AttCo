@@ -335,11 +335,12 @@ class WaveletBlock3D(nn.Module):
         )
 
         self.sca = nn.Sequential(
-            nn.AdaptiveMaxPool3d(1),
+            nn.AdaptiveAvgPool3d(1),
             nn.Conv3d(
                 in_channels=dw_channel, out_channels=dw_channel,
                 kernel_size=1, padding=0, stride=1, groups=1, bias=True
             ),
+            nn.Sigmoid()
         )
 
         ffn_channel = FFN_Expand * c
