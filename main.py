@@ -54,16 +54,16 @@ if __name__ == "__main__":
         print("Training fold: ", fold)
         parser = argparse.ArgumentParser()
         # -------------------------- 1. 调整默认batch size（两卡建议翻倍） --------------------------
-        parser.add_argument('--epochs', type=int, default=200, help='epoch number')
-        parser.add_argument('--lrate', type=float, default=0.002, help='learning rate（batch翻倍，学习率可选翻倍）')
-        parser.add_argument('--train_batch_size', type=int, default=6, help='training batch size（原2→两卡改4）')
+        parser.add_argument('--epochs', type=int, default=400, help='epoch number')
+        parser.add_argument('--lrate', type=float, default=0.001, help='learning rate（batch翻倍，学习率可选翻倍）')
+        parser.add_argument('--train_batch_size', type=int, default=2, help='training batch size（原2→两卡改4）')
         parser.add_argument('--val_batch_size', type=int, default=1, help='validation batch size')
         parser.add_argument('--is_thop', type=bool, default=True, help='whether calculate FLOPs/Params (Thop)')
         parser.add_argument('--path_image', type=str,
                             default="/mnt/data1/zhangjh/datasets/multimodal/BraTS2020/MICCAI_BraTS2020_TrainingData",
                             help='')
         parser.add_argument('--pretrained', type=str, default=None, help='')
-        parser.add_argument('--modelname', type=str, default="AttCo", help='Choose one of models: ')
+        parser.add_argument('--modelname', type=str, default="WaveCo", help='Choose one of models: ')
         parser.add_argument('--dataname', type=str, default="BraTS2020", help='Choose one of models: ')
 
         arg = parser.parse_args()
@@ -85,10 +85,10 @@ if __name__ == "__main__":
             gpu_ids = []
 
         # 模型初始化
-        if arg.modelname == "AttCo":
-            import models.AttCo_BraTS as net
+        if arg.modelname == "WaveCo":
+            import models.WaveCo_BraTS as net
 
-            model = net.AttCo(inChannel=2, outChannel=4, baseChannel=16)
+            model = net.WaveCo(inChannel=2, outChannel=4, baseChannel=16)
 
         # 数据变换（不变）
         train_transforms = transforms.Compose([
@@ -193,7 +193,7 @@ if __name__ == "__main__":
 
             if min_loss > loss_val:
                 min_loss = loss_val
-                filename = f"/mnt/data1/zhangjh/WaveCo/checkpoint/{arg.dataname}/{arg.modelname}/Fold_{fold}_bs_{arg.train_batch_size}_TC_{dice_val[0]}_ED_{dice_val[1]}_ET_{dice_val[2]}_WT_{dice_val[3]}.pt"
+                filename = f"/mnt/data1/zhangjh/AttCo/checkpoint/{arg.dataname}/{arg.modelname}/Fold_{fold}_bs_{arg.train_batch_size}_TC_{dice_val[0]}_ED_{dice_val[1]}_ET_{dice_val[2]}_WT_{dice_val[3]}.pt"
                 if os.path.exists(filename):
                     os.remove(filename)
                 if isinstance(model, torch.nn.DataParallel):
@@ -215,5 +215,5 @@ if __name__ == "__main__":
                 ['Epoch', 'Loss_train', 'Dice_TC_train', 'Dice_ED_train', 'Dice_ET_train', 'Dice_WT_train', 'Loss_val',
                  'Dice_TC_val', 'Dice_ED_val', 'Dice_ET_val', 'Dice_WT_val']])
             log_data_frame.to_csv(
-                f"/mnt/data1/zhangjh/WaveCo/checkpoint/{arg.dataname}/{arg.modelname}/log_train_BraTS2020_fold_{fold}_bs_{arg.train_batch_size}.csv",
+                f"/mnt/data1/zhangjh/AttCo/checkpoint/{arg.dataname}/{arg.modelname}/log_train_BraTS2020_fold_{fold}_bs_{arg.train_batch_size}.csv",
                 index=False)
