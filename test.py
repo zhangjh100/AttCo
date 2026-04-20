@@ -13,6 +13,7 @@ import dataset
 import transforms
 import metrics
 from models.AttCo_BraTS import AttCo  # 导入BraTS模型（AutoPET请替换为AttCo_AutoPET）
+from models.WaveCo_BraTS import WaveCo
 
 
 def save_nii(data, path, affine=np.eye(4)):
