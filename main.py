@@ -56,14 +56,14 @@ if __name__ == "__main__":
         # -------------------------- 1. 调整默认batch size（两卡建议翻倍） --------------------------
         parser.add_argument('--epochs', type=int, default=400, help='epoch number')
         parser.add_argument('--lrate', type=float, default=0.001, help='learning rate（batch翻倍，学习率可选翻倍）')
-        parser.add_argument('--train_batch_size', type=int, default=2, help='training batch size（原2→两卡改4）')
+        parser.add_argument('--train_batch_size', type=int, default=4, help='training batch size（原2→两卡改4）')
         parser.add_argument('--val_batch_size', type=int, default=1, help='validation batch size')
         parser.add_argument('--is_thop', type=bool, default=True, help='whether calculate FLOPs/Params (Thop)')
         parser.add_argument('--path_image', type=str,
                             default="/mnt/data1/zhangjh/datasets/multimodal/BraTS2020/MICCAI_BraTS2020_TrainingData",
                             help='')
         parser.add_argument('--pretrained', type=str, default=None, help='')
-        parser.add_argument('--modelname', type=str, default="WaveCo", help='Choose one of models: ')
+        parser.add_argument('--modelname', type=str, default="WaveCo2", help='Choose one of models: ')
         parser.add_argument('--dataname', type=str, default="BraTS2020", help='Choose one of models: ')
 
         arg = parser.parse_args()
@@ -85,10 +85,10 @@ if __name__ == "__main__":
             gpu_ids = []
 
         # 模型初始化
-        if arg.modelname == "WaveCo":
-            import models.WaveCo_BraTS as net
+        if arg.modelname == "WaveCo2":
+            import models.WaveCo2_BraTS as net
 
-            model = net.WaveCo(inChannel=2, outChannel=4, baseChannel=16)
+            model = net.WaveCo2(inChannel=2, outChannel=4, baseChannel=16)
 
         # 数据变换（不变）
         train_transforms = transforms.Compose([
