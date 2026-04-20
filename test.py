@@ -24,8 +24,8 @@ def save_nii(data, path, affine=np.eye(4)):
 
 if __name__ == "__main__":
     # -------------------------- 1. 命令行参数（完全兼容服务器调用） --------------------------
-    parser = argparse.ArgumentParser(description="AttCo 模型测试脚本")
-    parser.add_argument('--modelname', type=str, default="AttCo", help='模型名称')
+    parser = argparse.ArgumentParser(description="WaveCo 模型测试脚本")
+    parser.add_argument('--modelname', type=str, default="WaveCo", help='模型名称')
     parser.add_argument('--dataname', type=str, default="BraTS2020", help='数据集名称')
     parser.add_argument('--fold', type=int, default=0, help='交叉验证折数(0-4)')
     parser.add_argument('--test_batch_size', type=int, default=1, help='3D数据固定为1')
