@@ -63,7 +63,7 @@ if __name__ == "__main__":
 
     # -------------------------- 5. 初始化模型（参数必须和训练时完全一致！） --------------------------
     # 注意：baseChannel、inChannel等必须和训练时的参数完全相同，否则权重加载失败
-    model = WaveCo(inChannel=2, outChannel=4, baseChannel=24)  # 训练时用24就改成24！
+    model = WaveCo(inChannel=2, outChannel=4, baseChannel=16)  # 训练时用24就改成24！
     model = model.to(device)
 
     # -------------------------- 6. 加载训练好的权重（兼容单卡/多卡训练的权重） --------------------------
