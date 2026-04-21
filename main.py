@@ -51,17 +51,48 @@ def init_weights(net, init_type='xavier_uniform_', gain=1.0):
     net.apply(init_func)
 
 
-# 封装损失计算函数，提升鲁棒性
-def compute_total_loss(output, target, ce_dice_criterion, wavelet_criterion, wavelet_weight, device):
-    ce_dice_loss = ce_dice_criterion(output, target)
+# 封装损失计算函数，支持三个fusion阶段的小波损失
+def compute_total_loss(outputs, target, ce_dice_criterion, wavelet_criterion, wavelet_weight, fusion_weights, device):
+    """
+    Args:
+        outputs: 模型输出，格式为 (main_output, fusion1_out, fusion2_out, fusion3_out)
+        target: 目标标签
+        ce_dice_criterion: CE-Dice损失函数
+        wavelet_criterion: 小波损失函数
+        wavelet_weight: 小波损失全局权重
+        fusion_weights: 三个fusion阶段的权重列表 [1.0, 0.5, 1/3]
+        device: 计算设备
+    Returns:
+        total_loss: 总损失
+        ce_dice_loss: CE-Dice损失
+        total_wavelet_loss: 所有fusion阶段小波损失之和
+        wavelet_losses: 各fusion阶段的小波损失 [fusion1, fusion2, fusion3]
+    """
+    main_output, fusion1, fusion2, fusion3 = outputs
+    # 计算主输出的CE-Dice损失
+    ce_dice_loss = ce_dice_criterion(main_output, target)
+
+    total_wavelet_loss = torch.tensor(0.0, device=device)
+    wavelet_losses = [torch.tensor(0.0, device=device) for _ in range(3)]
+
     if wavelet_weight > 1e-6:  # 避免浮点误差导致的无效计算
-        wavelet_loss = wavelet_criterion(output, target)
-        wavelet_loss = wavelet_loss.mean()  # 确保输出为标量，适配多卡/不同维度场景
-        total_loss = ce_dice_loss + wavelet_weight * wavelet_loss
+        # 计算每个fusion阶段的小波损失
+        fusion_outputs = [fusion1, fusion2, fusion3]
+        for i in range(3):
+            if fusion_outputs[i] is not None:
+                w_loss = wavelet_criterion(fusion_outputs[i], target)
+                w_loss = w_loss.mean()  # 确保输出为标量
+                wavelet_losses[i] = w_loss
+                total_wavelet_loss += fusion_weights[i] * w_loss
+
+        # 乘以全局小波权重
+        total_wavelet_loss = wavelet_weight * total_wavelet_loss
     else:
-        wavelet_loss = torch.tensor(0.0, device=device)
-        total_loss = ce_dice_loss
-    return total_loss, ce_dice_loss, wavelet_loss
+        total_wavelet_loss = torch.tensor(0.0, device=device)
+
+    # 总损失 = CE-Dice损失 + 小波损失
+    total_loss = ce_dice_loss + total_wavelet_loss
+    return total_loss, ce_dice_loss, total_wavelet_loss, wavelet_losses
 
 
 if __name__ == "__main__":
@@ -83,10 +114,13 @@ if __name__ == "__main__":
         parser.add_argument('--modelname', type=str, default="WaveCo2", help='Choose one of models: ')
         parser.add_argument('--dataname', type=str, default="BraTS2020", help='Choose one of models: ')
 
-        parser.add_argument('--wavelet_loss_weight', type=float, default=0.1, help='权重：小波损失占总损失的比例')
+        parser.add_argument('--wavelet_loss_weight', type=float, default=1.0, help='小波损失全局权重')
         parser.add_argument('--wavelet_level', type=int, default=3, help='小波分解的层数（根据你的小波损失实现调整）')
 
         arg = parser.parse_args()
+
+        # 定义三个fusion阶段的权重（阶段1:1/1, 阶段2:1/2, 阶段3:1/3）
+        fusion_weights = [1.0, 0.5, 1 / 3]
 
         np.random.seed(100)
         torch.manual_seed(100)
@@ -182,68 +216,87 @@ if __name__ == "__main__":
         min_loss = np.inf
         log_data = []
         for epoch in range(arg.epochs):
-            # 初始化训练阶段的损失累积变量（包含小波损失和CE-Dice损失）
+            # 初始化训练阶段的损失累积变量
             loss_train = 0.0
             ce_dice_loss_train = 0.0
-            wavelet_loss_train = 0.0
+            total_wavelet_loss_train = 0.0
+            wavelet_loss1_train = 0.0  # fusion1小波损失
+            wavelet_loss2_train = 0.0  # fusion2小波损失
+            wavelet_loss3_train = 0.0  # fusion3小波损失
             dice_train = [0] * 4
 
             model.train()
             for sample in tqdm(dataloaders['train']):
                 input, target = sample["input"].to(device), sample["target"].type(torch.LongTensor).to(device)
-                output = model(input)
+                # 模型输出需包含主输出+三个fusion输出：(main_output, fusion1, fusion2, fusion3)
+                outputs = model(input)
 
-                # 计算总损失（封装函数，鲁棒性更强）
-                loss, ce_dice_loss, wavelet_loss = compute_total_loss(
-                    output, target, criterion, wavelet_criterion, arg.wavelet_loss_weight, device
+                # 计算总损失（包含三个fusion的小波损失）
+                loss, ce_dice_loss, total_wavelet_loss, wavelet_losses = compute_total_loss(
+                    outputs, target, criterion, wavelet_criterion, arg.wavelet_loss_weight, fusion_weights, device
                 )
 
                 loss.backward()
                 optimizer.step()
                 optimizer.zero_grad()
 
-                dice = dice_metric(output, target)
+                dice = dice_metric(outputs[0], target)  # 主输出计算Dice
                 loss_train += loss.item()
                 ce_dice_loss_train += ce_dice_loss.item()
-                wavelet_loss_train += wavelet_loss.item()
+                total_wavelet_loss_train += total_wavelet_loss.item()
+                wavelet_loss1_train += wavelet_losses[0].item()
+                wavelet_loss2_train += wavelet_losses[1].item()
+                wavelet_loss3_train += wavelet_losses[2].item()
                 for idx_dice in range(4):
                     dice_train[idx_dice] += dice[idx_dice].item()
 
             # 计算训练集epoch平均损失
             loss_train /= len(dataloaders['train'])
             ce_dice_loss_train /= len(dataloaders['train'])
-            wavelet_loss_train /= len(dataloaders['train'])
+            total_wavelet_loss_train /= len(dataloaders['train'])
+            wavelet_loss1_train /= len(dataloaders['train'])
+            wavelet_loss2_train /= len(dataloaders['train'])
+            wavelet_loss3_train /= len(dataloaders['train'])
             for idx_dice in range(4):
                 dice_train[idx_dice] /= len(dataloaders['train'])
 
             # 验证阶段
             loss_val = 0.0
             ce_dice_loss_val = 0.0
-            wavelet_loss_val = 0.0
+            total_wavelet_loss_val = 0.0
+            wavelet_loss1_val = 0.0
+            wavelet_loss2_val = 0.0
+            wavelet_loss3_val = 0.0
             dice_val = [0] * 4
 
             model.eval()
             with torch.no_grad():
                 for sample in tqdm(dataloaders['val']):
                     input, target = sample["input"].to(device), sample["target"].type(torch.LongTensor).to(device)
-                    output = model(input)
+                    outputs = model(input)  # (main_output, fusion1, fusion2, fusion3)
 
                     # 计算总损失
-                    loss, ce_dice_loss, wavelet_loss = compute_total_loss(
-                        output, target, criterion, wavelet_criterion, arg.wavelet_loss_weight, device
+                    loss, ce_dice_loss, total_wavelet_loss, wavelet_losses = compute_total_loss(
+                        outputs, target, criterion, wavelet_criterion, arg.wavelet_loss_weight, fusion_weights, device
                     )
 
-                    dice = dice_metric(output, target)
+                    dice = dice_metric(outputs[0], target)  # 主输出计算Dice
                     loss_val += loss.item()
                     ce_dice_loss_val += ce_dice_loss.item()
-                    wavelet_loss_val += wavelet_loss.item()
+                    total_wavelet_loss_val += total_wavelet_loss.item()
+                    wavelet_loss1_val += wavelet_losses[0].item()
+                    wavelet_loss2_val += wavelet_losses[1].item()
+                    wavelet_loss3_val += wavelet_losses[2].item()
                     for idx_dice in range(4):
                         dice_val[idx_dice] += dice[idx_dice].item()
 
             # 计算验证集epoch平均损失
             loss_val /= len(dataloaders['val'])
             ce_dice_loss_val /= len(dataloaders['val'])
-            wavelet_loss_val /= len(dataloaders['val'])
+            total_wavelet_loss_val /= len(dataloaders['val'])
+            wavelet_loss1_val /= len(dataloaders['val'])
+            wavelet_loss2_val /= len(dataloaders['val'])
+            wavelet_loss3_val /= len(dataloaders['val'])
             for idx_dice in range(4):
                 dice_val[idx_dice] /= len(dataloaders['val'])
 
@@ -259,25 +312,36 @@ if __name__ == "__main__":
                     torch.save(model.state_dict(), filename)
                 print("Saving model: ", filename)
 
-            # 打印日志（使用epoch平均损失，而非最后一个batch）
+            # 打印日志（包含各fusion阶段的小波损失）
             print(
-                f"Epoch: {epoch} | Loss_Ce_Dice_train: {ce_dice_loss_train:.04f} | Loss_Wavelet_train: {wavelet_loss_train:.04f} | Loss_train: {loss_train:.04f} | Dice_TC: {dice_train[0]:.04f} | Dice_ED: {dice_train[1]:.04f} | Dice_ET {dice_train[2]:.04f} | Dice_WT: {dice_train[3]:.04f}"
+                f"Epoch: {epoch} | Loss_Ce_Dice_train: {ce_dice_loss_train:.04f} | "
+                f"Wavelet1_train: {wavelet_loss1_train:.04f} | Wavelet2_train: {wavelet_loss2_train:.04f} | Wavelet3_train: {wavelet_loss3_train:.04f} | "
+                f"Total_Wavelet_train: {total_wavelet_loss_train:.04f} | Loss_train: {loss_train:.04f} | "
+                f"Dice_TC: {dice_train[0]:.04f} | Dice_ED: {dice_train[1]:.04f} | Dice_ET {dice_train[2]:.04f} | Dice_WT: {dice_train[3]:.04f}"
             )
             print(
-                f"Epoch: {epoch} | Loss_Ce_Dice_val: {ce_dice_loss_val:.04f} | Loss_Wavelet_val: {wavelet_loss_val:.04f} | Loss_val: {loss_val:.04f} | Dice_TC: {dice_val[0]:.04f} | Dice_ED: {dice_val[1]:.04f} | Dice_ET {dice_val[2]:.04f} | Dice_WT: {dice_val[3]:.04f}"
+                f"Epoch: {epoch} | Loss_Ce_Dice_val: {ce_dice_loss_val:.04f} | "
+                f"Wavelet1_val: {wavelet_loss1_val:.04f} | Wavelet2_val: {wavelet_loss2_val:.04f} | Wavelet3_val: {wavelet_loss3_val:.04f} | "
+                f"Total_Wavelet_val: {total_wavelet_loss_val:.04f} | Loss_val: {loss_val:.04f} | "
+                f"Dice_TC: {dice_val[0]:.04f} | Dice_ED: {dice_val[1]:.04f} | Dice_ET {dice_val[2]:.04f} | Dice_WT: {dice_val[3]:.04f}"
             )
 
-            # 保存日志（包含小波损失和CE-Dice损失）
+            # 保存日志（包含各fusion阶段的小波损失）
             log_data.append(
-                [epoch, loss_train, ce_dice_loss_train, wavelet_loss_train, dice_train[0], dice_train[1], dice_train[2],
-                 dice_train[3],
-                 loss_val, ce_dice_loss_val, wavelet_loss_val, dice_val[0], dice_val[1], dice_val[2], dice_val[3]]
+                [epoch, loss_train, ce_dice_loss_train, total_wavelet_loss_train,
+                 wavelet_loss1_train, wavelet_loss2_train, wavelet_loss3_train,
+                 dice_train[0], dice_train[1], dice_train[2], dice_train[3],
+                 loss_val, ce_dice_loss_val, total_wavelet_loss_val,
+                 wavelet_loss1_val, wavelet_loss2_val, wavelet_loss3_val,
+                 dice_val[0], dice_val[1], dice_val[2], dice_val[3]]
             )
 
             log_data_frame = pd.DataFrame(log_data, columns=[
-                'Epoch', 'Loss_train', 'Ce_Dice_Loss_train', 'Wavelet_Loss_train',
+                'Epoch', 'Loss_train', 'Ce_Dice_Loss_train', 'Total_Wavelet_Loss_train',
+                'Wavelet1_Loss_train', 'Wavelet2_Loss_train', 'Wavelet3_Loss_train',
                 'Dice_TC_train', 'Dice_ED_train', 'Dice_ET_train', 'Dice_WT_train',
-                'Loss_val', 'Ce_Dice_Loss_val', 'Wavelet_Loss_val',
+                'Loss_val', 'Ce_Dice_Loss_val', 'Total_Wavelet_Loss_val',
+                'Wavelet1_Loss_val', 'Wavelet2_Loss_val', 'Wavelet3_Loss_val',
                 'Dice_TC_val', 'Dice_ED_val', 'Dice_ET_val', 'Dice_WT_val'
             ])
             log_data_frame.to_csv(

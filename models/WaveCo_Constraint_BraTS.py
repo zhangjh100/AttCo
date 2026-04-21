@@ -274,6 +274,7 @@ class LWN3D(nn.Module):
         hi = single_channel_filters[1]  # HLL 高通（任选一个高通即可）
         return lo, hi
 
+
 class WaveletLoss(nn.Module):
     def __init__(self, device='cuda', level=None):
         super().__init__()
@@ -285,9 +286,11 @@ class WaveletLoss(nn.Module):
         完美重构损失 (Perfect Reconstruction Loss)
         论文核心约束：低通+高通滤波器满足双正交小波重构条件
         """
-        # 计算滤波器内积和，目标值 = 2
-        sum_lo = torch.sum(lo)
-        sum_hi = torch.sum(hi)
+        # 展平滤波器为一维，避免多维度求和错误
+        lo_flat = lo.flatten()
+        hi_flat = hi.flatten()
+        sum_lo = torch.sum(lo_flat)
+        sum_hi = torch.sum(hi_flat)
         loss = torch.pow(sum_lo + sum_hi - 2.0, 2)
         return loss
 
@@ -296,13 +299,20 @@ class WaveletLoss(nn.Module):
         混叠消除损失 (Alias Cancellation Loss)
         论文核心约束：消除小波变换的频率混叠
         """
-        # 生成交替符号掩码 (-1)^k
-        k = torch.arange(0, lo.numel(), device=self.device)
-        mask = torch.pow(-1.0, k).view(lo.shape)
+        # 展平滤波器为一维
+        lo_flat = lo.flatten()
+        hi_flat = hi.flatten()
+
+        # 为每个滤波器单独生成交替符号掩码 (-1)^k
+        k_lo = torch.arange(0, lo_flat.numel(), device=self.device)
+        mask_lo = torch.pow(-1.0, k_lo)
+
+        k_hi = torch.arange(0, hi_flat.numel(), device=self.device)
+        mask_hi = torch.pow(-1.0, k_hi)
 
         # 计算交替加权和，目标值 = 0
-        alt_lo = torch.sum(lo * mask)
-        alt_hi = torch.sum(hi * mask)
+        alt_lo = torch.sum(lo_flat * mask_lo)
+        alt_hi = torch.sum(hi_flat * mask_hi)
         loss = torch.pow(alt_lo + alt_hi, 2)
         return loss
 
