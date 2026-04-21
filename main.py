@@ -53,18 +53,19 @@ def init_weights(net, init_type='xavier_uniform_', gain=1.0):
 # ===================== 核心修复：正确计算小波损失（提取滤波器） =====================
 def compute_wavelet_loss(model, wavelet_criterion, device):
     """
-    自动提取模型中 fusion1, fusion2, fusion3 的小波滤波器并计算损失
-    权重：fusion1=1.0, fusion2=0.5, fusion3=1/3
+    自动提取模型中 fusion1, fusion2, fusion3, fusion4 的小波滤波器并计算损失
+    权重：fusion1=1.0, fusion2=0.5, fusion3=1/3, fusion4=1/4
     """
-    fusion_weights = [1.0, 0.5, 1/3]
+    # 新增fusion4的权重 1/4
+    fusion_weights = [1.0, 0.5, 1/3, 1/4]
     total_wave_loss = 0.0
-    loss1 = loss2 = loss3 = 0.0
+    loss1 = loss2 = loss3 = loss4 = 0.0  # 新增loss4
 
     # 处理多卡 DataParallel
     model_core = model.module if isinstance(model, nn.DataParallel) else model
 
-    # 遍历3个fusion模块
-    for idx, fusion_name in enumerate(['fusion1', 'fusion2', 'fusion3']):
+    # 遍历4个fusion模块（新增fusion4）
+    for idx, fusion_name in enumerate(['fusion1', 'fusion2', 'fusion3', 'fusion4']):
         if hasattr(model_core, fusion_name):
             fusion_module = getattr(model_core, fusion_name)
             # 找到LWN3D小波模块
@@ -80,11 +81,13 @@ def compute_wavelet_loss(model, wavelet_criterion, device):
                         loss1 = w_loss.item()
                     elif idx == 1:
                         loss2 = w_loss.item()
-                    else:
+                    elif idx == 2:
                         loss3 = w_loss.item()
+                    elif idx == 3:  # 新增fusion4的损失记录
+                        loss4 = w_loss.item()
                     break
 
-    return total_wave_loss, loss1, loss2, loss3
+    return total_wave_loss, loss1, loss2, loss3, loss4  # 返回loss4
 
 
 # ===================== 总损失计算 =====================
@@ -92,14 +95,14 @@ def compute_total_loss(model, output, target, ce_dice_criterion, wavelet_criteri
     # 分割主损失
     ce_dice_loss = ce_dice_criterion(output, target)
 
-    # 小波约束损失
-    wave_loss, w1, w2, w3 = compute_wavelet_loss(model, wavelet_criterion, device)
+    # 小波约束损失（适配4个fusion）
+    wave_loss, w1, w2, w3, w4 = compute_wavelet_loss(model, wavelet_criterion, device)
     total_wave_loss = wavelet_weight * wave_loss
 
     # 总损失
     total_loss = ce_dice_loss + total_wave_loss
 
-    return total_loss, ce_dice_loss, total_wave_loss, [w1, w2, w3]
+    return total_loss, ce_dice_loss, total_wave_loss, [w1, w2, w3, w4]  # 返回4个小波损失
 
 
 if __name__ == "__main__":
@@ -194,13 +197,14 @@ if __name__ == "__main__":
         log_data = []
 
         for epoch in range(arg.epochs):
-            # 训练指标初始化
+            # 训练指标初始化（新增wave4_train）
             loss_train = 0.0
             ce_dice_train = 0.0
             wave_total_train = 0.0
             wave1_train = 0.0
             wave2_train = 0.0
             wave3_train = 0.0
+            wave4_train = 0.0  # 新增fusion4训练损失
             dice_train = [0]*4
 
             model.train()
@@ -217,20 +221,21 @@ if __name__ == "__main__":
                 loss.backward()
                 optimizer.step()
 
-                # 累计损失
+                # 累计损失（新增wave4_train）
                 loss_train += loss.item()
                 ce_dice_train += ce_loss.item()
                 wave_total_train += wave_loss.item()
                 wave1_train += wave_list[0]
                 wave2_train += wave_list[1]
                 wave3_train += wave_list[2]
+                wave4_train += wave_list[3]  # 累计fusion4的小波损失
 
                 # Dice
                 dice = dice_metric(output, target)
                 for i in range(4):
                     dice_train[i] += dice[i].item()
 
-            # 训练集平均
+            # 训练集平均（新增wave4_train）
             n_train = len(dataloaders['train'])
             loss_train /= n_train
             ce_dice_train /= n_train
@@ -238,16 +243,18 @@ if __name__ == "__main__":
             wave1_train /= n_train
             wave2_train /= n_train
             wave3_train /= n_train
+            wave4_train /= n_train  # 新增fusion4平均
             for i in range(4):
                 dice_train[i] /= n_train
 
-            # 验证
+            # 验证（新增wave4_val）
             loss_val = 0.0
             ce_dice_val = 0.0
             wave_total_val = 0.0
             wave1_val = 0.0
             wave2_val = 0.0
             wave3_val = 0.0
+            wave4_val = 0.0  # 新增fusion4验证损失
             dice_val = [0]*4
 
             model.eval()
@@ -260,18 +267,20 @@ if __name__ == "__main__":
                         model, output, target, criterion, wavelet_criterion, arg.wavelet_loss_weight, device
                     )
 
+                    # 累计验证损失（新增wave4_val）
                     loss_val += loss.item()
                     ce_dice_val += ce_loss.item()
                     wave_total_val += wave_loss.item()
                     wave1_val += wave_list[0]
                     wave2_val += wave_list[1]
                     wave3_val += wave_list[2]
+                    wave4_val += wave_list[3]  # 累计fusion4验证损失
 
                     dice = dice_metric(output, target)
                     for i in range(4):
                         dice_val[i] += dice[i].item()
 
-            # 验证集平均
+            # 验证集平均（新增wave4_val）
             n_val = len(dataloaders['val'])
             loss_val /= n_val
             ce_dice_val /= n_val
@@ -279,6 +288,7 @@ if __name__ == "__main__":
             wave1_val /= n_val
             wave2_val /= n_val
             wave3_val /= n_val
+            wave4_val /= n_val  # 新增fusion4验证平均
             for i in range(4):
                 dice_val[i] /= n_val
 
@@ -291,24 +301,24 @@ if __name__ == "__main__":
                 torch.save(model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict(), filename)
                 print("Saving model: ", filename)
 
-            # 打印日志
+            # 打印日志（新增Wave4）
             print(f"[Epoch {epoch}]")
-            print(f"Train | CE-Dice: {ce_dice_train:.4f} | Wave1: {wave1_train:.4f} | Wave2: {wave2_train:.4f} | Wave3: {wave3_train:.4f} | Total: {loss_train:.4f}")
-            print(f"Val   | CE-Dice: {ce_dice_val:.4f} | Wave1: {wave1_val:.4f} | Wave2: {wave2_val:.4f} | Wave3: {wave3_val:.4f} | Total: {loss_val:.4f}")
+            print(f"Train | CE-Dice: {ce_dice_train:.4f} | Wave1: {wave1_train:.4f} | Wave2: {wave2_train:.4f} | Wave3: {wave3_train:.4f} | Wave4: {wave4_train:.4f} | Total: {loss_train:.4f}")
+            print(f"Val   | CE-Dice: {ce_dice_val:.4f} | Wave1: {wave1_val:.4f} | Wave2: {wave2_val:.4f} | Wave3: {wave3_val:.4f} | Wave4: {wave4_val:.4f} | Total: {loss_val:.4f}")
             print(f"Dice TC: {dice_train[0]:.4f} | ED: {dice_train[1]:.4f} | ET: {dice_train[2]:.4f} | WT: {dice_train[3]:.4f}")
 
-            # 保存日志
+            # 保存日志（新增Wave4_train/Wave4_val列）
             log_data.append([
-                epoch, loss_train, ce_dice_train, wave_total_train, wave1_train, wave2_train, wave3_train,
+                epoch, loss_train, ce_dice_train, wave_total_train, wave1_train, wave2_train, wave3_train, wave4_train,
                 dice_train[0], dice_train[1], dice_train[2], dice_train[3],
-                loss_val, ce_dice_val, wave_total_val, wave1_val, wave2_val, wave3_val,
+                loss_val, ce_dice_val, wave_total_val, wave1_val, wave2_val, wave3_val, wave4_val,
                 dice_val[0], dice_val[1], dice_val[2], dice_val[3]
             ])
 
             log_df = pd.DataFrame(log_data, columns=[
-                'Epoch','Loss_train','CE_Dice_train','Wave_Total_train','Wave1_train','Wave2_train','Wave3_train',
+                'Epoch','Loss_train','CE_Dice_train','Wave_Total_train','Wave1_train','Wave2_train','Wave3_train','Wave4_train',
                 'Dice_TC_train','Dice_ED_train','Dice_ET_train','Dice_WT_train',
-                'Loss_val','CE_Dice_val','Wave_Total_val','Wave1_val','Wave2_val','Wave3_val',
+                'Loss_val','CE_Dice_val','Wave_Total_val','Wave1_val','Wave2_val','Wave3_val','Wave4_val',
                 'Dice_TC_val','Dice_ED_val','Dice_ET_val','Dice_WT_val'
             ])
             log_df.to_csv(f"/mnt/data1/zhangjh/AttCo/checkpoint/{arg.dataname}/{arg.modelname}/log_fold_{fold}.csv", index=False)

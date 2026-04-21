@@ -244,10 +244,6 @@ class LWN3D(nn.Module):
         self.kernel = nn.Parameter(self.kernel, requires_grad=initialize)
 
     def forward(self, x):
-        """
-        输入 x: [B, C, D, H, W]
-        输出: [B, C*8, D//2, H//2, W//2] → 8个子带拼接在通道维度
-        """
         kernel_size = self.kernel.shape[2:]
         padding = tuple((k - 1) // 2 for k in kernel_size)
 
@@ -264,10 +260,6 @@ class LWN3D(nn.Module):
         return out
 
     def get_filters(self):
-        """
-        从可学习小波核中提取：低通滤波器(LLL) + 高通滤波器
-        直接供小波损失函数使用
-        """
         # 分组：每个通道对应4个滤波器 (C*4, 1, K, K, K)
         single_channel_filters = self.kernel[:4]  # 取第一个通道的滤波器代表所有通道
         lo = single_channel_filters[0]  # LLL 低通
