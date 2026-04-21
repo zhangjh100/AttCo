@@ -121,7 +121,7 @@ if __name__ == "__main__":
         parser.add_argument('--modelname', type=str, default="WaveCo_Constraint", help='model name')
         parser.add_argument('--dataname', type=str, default="BraTS2020", help='dataset name')
         # 小波损失权重
-        parser.add_argument('--wavelet_loss_weight', type=float, default=0.05, help='小波损失全局权重')
+        parser.add_argument('--wavelet_loss_weight', type=float, default=1.0, help='小波损失全局权重')
 
         arg = parser.parse_args()
 
