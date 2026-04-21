@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 import losses, transforms, dataset, metrics, utils
 from torch.nn import init
 
-from WaveCo_Constraint_BraTS import WaveletLoss
+from models.WaveCo_Constraint_BraTS import WaveletLoss
 
 losses.WaveletLoss = WaveletLoss
 
