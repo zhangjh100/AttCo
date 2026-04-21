@@ -4,6 +4,8 @@ import numpy as np
 import torch.nn.functional as F
 from torch.autograd import Variable
 
+import pywt
+
 class CE_GeneralizedSoftDiceLoss(nn.Module):
     def __init__(self, alpha=0.5):
         super(CE_GeneralizedSoftDiceLoss, self).__init__()
@@ -134,6 +136,8 @@ class MSE(nn.Module):
     def forward(self, y_true, y_pred):
         loss = (abs(y_true - y_pred)).sum() / y_true.shape[0]
         return loss  
+
+
 
 class SoftDiceLoss_v1(nn.Module):
     def __init__(self):  

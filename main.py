@@ -11,6 +11,10 @@ from torch.utils.data import DataLoader
 import losses, transforms, dataset, metrics, utils
 from torch.nn import init
 
+from WaveCo_Constraint_BraTS import WaveletLoss
+
+losses.WaveletLoss = WaveletLoss
+
 
 def param_network(model):
     """Print out the network information."""
@@ -45,6 +49,19 @@ def init_weights(net, init_type='xavier_uniform_', gain=1.0):
             init.constant_(m.bias.data, 0.0)
 
     net.apply(init_func)
+
+
+# 封装损失计算函数，提升鲁棒性
+def compute_total_loss(output, target, ce_dice_criterion, wavelet_criterion, wavelet_weight, device):
+    ce_dice_loss = ce_dice_criterion(output, target)
+    if wavelet_weight > 1e-6:  # 避免浮点误差导致的无效计算
+        wavelet_loss = wavelet_criterion(output, target)
+        wavelet_loss = wavelet_loss.mean()  # 确保输出为标量，适配多卡/不同维度场景
+        total_loss = ce_dice_loss + wavelet_weight * wavelet_loss
+    else:
+        wavelet_loss = torch.tensor(0.0, device=device)
+        total_loss = ce_dice_loss
+    return total_loss, ce_dice_loss, wavelet_loss
 
 
 if __name__ == "__main__":
@@ -152,26 +169,34 @@ if __name__ == "__main__":
 
         param_network(model)
         optimizer = torch.optim.Adam(model.parameters(), lr=arg.lrate, betas=(0.9, 0.99))
+
+        # -------------------------- 损失函数初始化（移到指定设备） --------------------------
         criterion = losses.CE_GeneralizedSoftDiceLoss()
         wavelet_criterion = losses.WaveletLoss(level=arg.wavelet_level)
+        # 关键：将损失函数移到设备上，避免张量设备不匹配
+        criterion = criterion.to(device)
+        wavelet_criterion = wavelet_criterion.to(device)
+
         dice_metric = metrics.DiceMetrics()
 
         min_loss = np.inf
         log_data = []
         for epoch in range(arg.epochs):
-            loss_train, loss_val = 0, 0
-            dice_train, dice_val = [0] * 4, [0] * 4
+            # 初始化训练阶段的损失累积变量（包含小波损失和CE-Dice损失）
+            loss_train = 0.0
+            ce_dice_loss_train = 0.0
+            wavelet_loss_train = 0.0
+            dice_train = [0] * 4
+
             model.train()
             for sample in tqdm(dataloaders['train']):
                 input, target = sample["input"].to(device), sample["target"].type(torch.LongTensor).to(device)
                 output = model(input)
 
-                # add Wavelet Constrain Loss
-                ce_dice_loss = criterion(output, target)
-                wavelet_loss = wavelet_criterion(output, target)
-
-                # loss = criterion(output, target)
-                loss = ce_dice_loss + arg.wavelet_loss_weight * wavelet_loss
+                # 计算总损失（封装函数，鲁棒性更强）
+                loss, ce_dice_loss, wavelet_loss = compute_total_loss(
+                    output, target, criterion, wavelet_criterion, arg.wavelet_loss_weight, device
+                )
 
                 loss.backward()
                 optimizer.step()
@@ -179,12 +204,23 @@ if __name__ == "__main__":
 
                 dice = dice_metric(output, target)
                 loss_train += loss.item()
+                ce_dice_loss_train += ce_dice_loss.item()
+                wavelet_loss_train += wavelet_loss.item()
                 for idx_dice in range(4):
                     dice_train[idx_dice] += dice[idx_dice].item()
 
+            # 计算训练集epoch平均损失
             loss_train /= len(dataloaders['train'])
+            ce_dice_loss_train /= len(dataloaders['train'])
+            wavelet_loss_train /= len(dataloaders['train'])
             for idx_dice in range(4):
                 dice_train[idx_dice] /= len(dataloaders['train'])
+
+            # 验证阶段
+            loss_val = 0.0
+            ce_dice_loss_val = 0.0
+            wavelet_loss_val = 0.0
+            dice_val = [0] * 4
 
             model.eval()
             with torch.no_grad():
@@ -192,21 +228,26 @@ if __name__ == "__main__":
                     input, target = sample["input"].to(device), sample["target"].type(torch.LongTensor).to(device)
                     output = model(input)
 
-                    ce_dice_loss = criterion(output, target)
-                    wavelet_loss = wavelet_criterion(output, target)
+                    # 计算总损失
+                    loss, ce_dice_loss, wavelet_loss = compute_total_loss(
+                        output, target, criterion, wavelet_criterion, arg.wavelet_loss_weight, device
+                    )
 
-                    # loss = criterion(output, target)
-                    loss = ce_dice_loss + arg.wavelet_loss_weight * wavelet_loss
                     dice = dice_metric(output, target)
-
                     loss_val += loss.item()
+                    ce_dice_loss_val += ce_dice_loss.item()
+                    wavelet_loss_val += wavelet_loss.item()
                     for idx_dice in range(4):
                         dice_val[idx_dice] += dice[idx_dice].item()
 
+            # 计算验证集epoch平均损失
             loss_val /= len(dataloaders['val'])
+            ce_dice_loss_val /= len(dataloaders['val'])
+            wavelet_loss_val /= len(dataloaders['val'])
             for idx_dice in range(4):
                 dice_val[idx_dice] /= len(dataloaders['val'])
 
+            # 保存最优模型
             if min_loss > loss_val:
                 min_loss = loss_val
                 filename = f"/mnt/data1/zhangjh/AttCo/checkpoint/{arg.dataname}/{arg.modelname}/Fold_{fold}_bs_{arg.train_batch_size}_TC_{dice_val[0]}_ED_{dice_val[1]}_ET_{dice_val[2]}_WT_{dice_val[3]}.pt"
@@ -218,18 +259,28 @@ if __name__ == "__main__":
                     torch.save(model.state_dict(), filename)
                 print("Saving model: ", filename)
 
+            # 打印日志（使用epoch平均损失，而非最后一个batch）
             print(
-                f"Epoch: {epoch} | Loss_Ce_Dice: {ce_dice_loss:.04f} | Loss_Wavelet: {wavelet_loss:.04f} | Loss_train: {loss_train:.04f} | Dice_TC: {dice_train[0]:.04f} | Dice_ED: {dice_train[1]:.04f} | Dice_ET {dice_train[2]:.04f} | Dice_WT: {dice_train[3]:.04f}")
+                f"Epoch: {epoch} | Loss_Ce_Dice_train: {ce_dice_loss_train:.04f} | Loss_Wavelet_train: {wavelet_loss_train:.04f} | Loss_train: {loss_train:.04f} | Dice_TC: {dice_train[0]:.04f} | Dice_ED: {dice_train[1]:.04f} | Dice_ET {dice_train[2]:.04f} | Dice_WT: {dice_train[3]:.04f}"
+            )
             print(
-                f"Epoch: {epoch} | Loss_Ce_Dice: {ce_dice_loss:.04f} | Loss_Wavelet: {wavelet_loss:.04f} | Loss_val: {loss_val:.04f} | Dice_TC: {dice_val[0]:.04f} | Dice_ED: {dice_val[1]:.04f} | Dice_ET {dice_val[2]:.04f} | Dice_WT: {dice_val[3]:.04f}")
-            log_data.append(
-                [epoch, loss_train, dice_train[0], dice_train[1], dice_train[2], dice_train[3], loss_val, dice_val[0],
-                 dice_val[1], dice_val[2], dice_val[3]])
+                f"Epoch: {epoch} | Loss_Ce_Dice_val: {ce_dice_loss_val:.04f} | Loss_Wavelet_val: {wavelet_loss_val:.04f} | Loss_val: {loss_val:.04f} | Dice_TC: {dice_val[0]:.04f} | Dice_ED: {dice_val[1]:.04f} | Dice_ET {dice_val[2]:.04f} | Dice_WT: {dice_val[3]:.04f}"
+            )
 
-            log_data_frame = np.asarray(log_data)
-            log_data_frame = pd.DataFrame(log_data_frame, columns=[
-                ['Epoch', 'Loss_train', 'Dice_TC_train', 'Dice_ED_train', 'Dice_ET_train', 'Dice_WT_train', 'Loss_val',
-                 'Dice_TC_val', 'Dice_ED_val', 'Dice_ET_val', 'Dice_WT_val']])
+            # 保存日志（包含小波损失和CE-Dice损失）
+            log_data.append(
+                [epoch, loss_train, ce_dice_loss_train, wavelet_loss_train, dice_train[0], dice_train[1], dice_train[2],
+                 dice_train[3],
+                 loss_val, ce_dice_loss_val, wavelet_loss_val, dice_val[0], dice_val[1], dice_val[2], dice_val[3]]
+            )
+
+            log_data_frame = pd.DataFrame(log_data, columns=[
+                'Epoch', 'Loss_train', 'Ce_Dice_Loss_train', 'Wavelet_Loss_train',
+                'Dice_TC_train', 'Dice_ED_train', 'Dice_ET_train', 'Dice_WT_train',
+                'Loss_val', 'Ce_Dice_Loss_val', 'Wavelet_Loss_val',
+                'Dice_TC_val', 'Dice_ED_val', 'Dice_ET_val', 'Dice_WT_val'
+            ])
             log_data_frame.to_csv(
                 f"/mnt/data1/zhangjh/AttCo/checkpoint/{arg.dataname}/{arg.modelname}/log_train_BraTS2020_fold_{fold}_bs_{arg.train_batch_size}.csv",
-                index=False)
+                index=False
+            )

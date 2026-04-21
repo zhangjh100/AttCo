@@ -274,10 +274,11 @@ class LWN3D(nn.Module):
         hi = single_channel_filters[1]  # HLL 高通（任选一个高通即可）
         return lo, hi
 
-class WaveletConstraintLoss(nn.Module):
-    def __init__(self, device='cuda'):
+class WaveletLoss(nn.Module):
+    def __init__(self, device='cuda', level=None):
         super().__init__()
         self.device = device
+        self.level = level
 
     def perfect_reconstruction_loss(self, lo, hi):
         """
