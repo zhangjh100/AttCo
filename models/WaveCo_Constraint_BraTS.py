@@ -263,6 +263,66 @@ class LWN3D(nn.Module):
         # 输出：通道数 ×4，空间尺寸 ÷2 (标准3D DWT结果)
         return out
 
+    def get_filters(self):
+        """
+        从可学习小波核中提取：低通滤波器(LLL) + 高通滤波器
+        直接供小波损失函数使用
+        """
+        # 分组：每个通道对应4个滤波器 (C*4, 1, K, K, K)
+        single_channel_filters = self.kernel[:4]  # 取第一个通道的滤波器代表所有通道
+        lo = single_channel_filters[0]  # LLL 低通
+        hi = single_channel_filters[1]  # HLL 高通（任选一个高通即可）
+        return lo, hi
+
+class WaveletConstraintLoss(nn.Module):
+    def __init__(self, device='cuda'):
+        super().__init__()
+        self.device = device
+
+    def perfect_reconstruction_loss(self, lo, hi):
+        """
+        完美重构损失 (Perfect Reconstruction Loss)
+        论文核心约束：低通+高通滤波器满足双正交小波重构条件
+        """
+        # 计算滤波器内积和，目标值 = 2
+        sum_lo = torch.sum(lo)
+        sum_hi = torch.sum(hi)
+        loss = torch.pow(sum_lo + sum_hi - 2.0, 2)
+        return loss
+
+    def alias_cancellation_loss(self, lo, hi):
+        """
+        混叠消除损失 (Alias Cancellation Loss)
+        论文核心约束：消除小波变换的频率混叠
+        """
+        # 生成交替符号掩码 (-1)^k
+        k = torch.arange(0, lo.numel(), device=self.device)
+        mask = torch.pow(-1.0, k).view(lo.shape)
+
+        # 计算交替加权和，目标值 = 0
+        alt_lo = torch.sum(lo * mask)
+        alt_hi = torch.sum(hi * mask)
+        loss = torch.pow(alt_lo + alt_hi, 2)
+        return loss
+
+    def forward(self, lo_filter, hi_filter):
+        """
+        输入：
+            lo_filter: 可学习3D小波**低通滤波器**权重 (LLL)
+            hi_filter: 可学习3D小波**高通滤波器**权重
+        输出：
+            total_wavelet_loss: 论文小波总约束损失
+        """
+        lo = lo_filter.to(self.device)
+        hi = hi_filter.to(self.device)
+
+        # 计算两个子损失
+        loss_perfect = self.perfect_reconstruction_loss(lo, hi)
+        loss_alias = self.alias_cancellation_loss(lo, hi)
+
+        # 论文总小波损失 = 两者相加
+        total_loss = loss_perfect + loss_alias
+        return total_loss
 
 class WaveletBlock3D(nn.Module):
     def __init__(self, c, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.):
@@ -326,12 +386,12 @@ class WaveletBlock3D(nn.Module):
 
         return y + x * self.gamma
 
-class WaveCo2(nn.Module):
+class WaveCo2_Constraint(nn.Module):
     """
     """
 
     def __init__(self, inChannel=2, outChannel=4, baseChannel=24):
-        super(WaveCo2, self).__init__()
+        super(WaveCo2_Constraint, self).__init__()
         self.encoder1 = Encoder(inChannel=inChannel, baseChannel=baseChannel)
         self.encoder2 = Encoder(inChannel=inChannel, baseChannel=baseChannel)
 
@@ -398,7 +458,7 @@ class WaveCo2(nn.Module):
 
 ###
 if __name__ == "__main__":
-    model = WaveCo2(inChannel=2, outChannel=4)
+    model = WaveCo2_Constraint(inChannel=2, outChannel=4)
     x = torch.ones((2, 4, 128, 128, 128))
     output = model(x)
     print(output.shape)

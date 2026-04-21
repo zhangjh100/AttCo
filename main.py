@@ -66,6 +66,9 @@ if __name__ == "__main__":
         parser.add_argument('--modelname', type=str, default="WaveCo2", help='Choose one of models: ')
         parser.add_argument('--dataname', type=str, default="BraTS2020", help='Choose one of models: ')
 
+        parser.add_argument('--wavelet_loss_weight', type=float, default=0.1, help='权重：小波损失占总损失的比例')
+        parser.add_argument('--wavelet_level', type=int, default=3, help='小波分解的层数（根据你的小波损失实现调整）')
+
         arg = parser.parse_args()
 
         np.random.seed(100)
@@ -85,10 +88,10 @@ if __name__ == "__main__":
             gpu_ids = []
 
         # 模型初始化
-        if arg.modelname == "WaveCo2":
-            import models.WaveCo2_BraTS as net
+        if arg.modelname == "WaveCo_Constraint":
+            import models.WaveCo_Constraint_BraTS as net
 
-            model = net.WaveCo2(inChannel=2, outChannel=4, baseChannel=16)
+            model = net.WaveCo_Constraint(inChannel=2, outChannel=4, baseChannel=16)
 
         # 数据变换（不变）
         train_transforms = transforms.Compose([
@@ -150,6 +153,7 @@ if __name__ == "__main__":
         param_network(model)
         optimizer = torch.optim.Adam(model.parameters(), lr=arg.lrate, betas=(0.9, 0.99))
         criterion = losses.CE_GeneralizedSoftDiceLoss()
+        wavelet_criterion = losses.WaveletLoss(level=arg.wavelet_level)
         dice_metric = metrics.DiceMetrics()
 
         min_loss = np.inf
@@ -161,7 +165,14 @@ if __name__ == "__main__":
             for sample in tqdm(dataloaders['train']):
                 input, target = sample["input"].to(device), sample["target"].type(torch.LongTensor).to(device)
                 output = model(input)
-                loss = criterion(output, target)
+
+                # add Wavelet Constrain Loss
+                ce_dice_loss = criterion(output, target)
+                wavelet_loss = wavelet_criterion(output, target)
+
+                # loss = criterion(output, target)
+                loss = ce_dice_loss + arg.wavelet_loss_weight * wavelet_loss
+
                 loss.backward()
                 optimizer.step()
                 optimizer.zero_grad()
@@ -180,7 +191,12 @@ if __name__ == "__main__":
                 for sample in tqdm(dataloaders['val']):
                     input, target = sample["input"].to(device), sample["target"].type(torch.LongTensor).to(device)
                     output = model(input)
-                    loss = criterion(output, target)
+
+                    ce_dice_loss = criterion(output, target)
+                    wavelet_loss = wavelet_criterion(output, target)
+
+                    # loss = criterion(output, target)
+                    loss = ce_dice_loss + arg.wavelet_loss_weight * wavelet_loss
                     dice = dice_metric(output, target)
 
                     loss_val += loss.item()
@@ -203,9 +219,9 @@ if __name__ == "__main__":
                 print("Saving model: ", filename)
 
             print(
-                f"Epoch: {epoch} | Loss_train: {loss_train:.04f} | Dice_TC: {dice_train[0]:.04f} | Dice_ED: {dice_train[1]:.04f} | Dice_ET {dice_train[2]:.04f} | Dice_WT: {dice_train[3]:.04f}")
+                f"Epoch: {epoch} | Loss_Ce_Dice: {ce_dice_loss:.04f} | Loss_Wavelet: {wavelet_loss:.04f} | Loss_train: {loss_train:.04f} | Dice_TC: {dice_train[0]:.04f} | Dice_ED: {dice_train[1]:.04f} | Dice_ET {dice_train[2]:.04f} | Dice_WT: {dice_train[3]:.04f}")
             print(
-                f"Epoch: {epoch} | Loss_val: {loss_val:.04f} | Dice_TC: {dice_val[0]:.04f} | Dice_ED: {dice_val[1]:.04f} | Dice_ET {dice_val[2]:.04f} | Dice_WT: {dice_val[3]:.04f}")
+                f"Epoch: {epoch} | Loss_Ce_Dice: {ce_dice_loss:.04f} | Loss_Wavelet: {wavelet_loss:.04f} | Loss_val: {loss_val:.04f} | Dice_TC: {dice_val[0]:.04f} | Dice_ED: {dice_val[1]:.04f} | Dice_ET {dice_val[2]:.04f} | Dice_WT: {dice_val[3]:.04f}")
             log_data.append(
                 [epoch, loss_train, dice_train[0], dice_train[1], dice_train[2], dice_train[3], loss_val, dice_val[0],
                  dice_val[1], dice_val[2], dice_val[3]])
