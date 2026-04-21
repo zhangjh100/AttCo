@@ -386,12 +386,12 @@ class WaveletBlock3D(nn.Module):
 
         return y + x * self.gamma
 
-class WaveCo2_Constraint(nn.Module):
+class WaveCo_Constraint(nn.Module):
     """
     """
 
     def __init__(self, inChannel=2, outChannel=4, baseChannel=24):
-        super(WaveCo2_Constraint, self).__init__()
+        super(WaveCo_Constraint, self).__init__()
         self.encoder1 = Encoder(inChannel=inChannel, baseChannel=baseChannel)
         self.encoder2 = Encoder(inChannel=inChannel, baseChannel=baseChannel)
 
@@ -458,7 +458,7 @@ class WaveCo2_Constraint(nn.Module):
 
 ###
 if __name__ == "__main__":
-    model = WaveCo2_Constraint(inChannel=2, outChannel=4)
+    model = WaveCo_Constraint(inChannel=2, outChannel=4)
     x = torch.ones((2, 4, 128, 128, 128))
     output = model(x)
     print(output.shape)
