@@ -61,16 +61,28 @@ if __name__ == "__main__":
     test_set = dataset.MedDataset(args.path_image, listTestPatients, transforms=test_transforms, mode="val")
     test_loader = DataLoader(test_set, batch_size=args.test_batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
-    # -------------------------- 5. 初始化模型（参数必须和训练时完全一致！） --------------------------
-    # 注意：baseChannel、inChannel等必须和训练时的参数完全相同，否则权重加载失败
     model = WaveCo(inChannel=2, outChannel=4, baseChannel=16)  # 训练时用24就改成24！
     model = model.to(device)
 
-    # -------------------------- 6. 加载训练好的权重（兼容单卡/多卡训练的权重） --------------------------
     print(f"加载模型权重: {args.pretrained}")
     checkpoint = torch.load(args.pretrained, map_location=device)
 
-    # 处理多卡训练的权重（自动去掉module.前缀）
+    if isinstance(checkpoint, torch.nn.Module):
+        # 如果加载的是模型实例，直接提取其state_dict
+        model.load_state_dict(checkpoint.state_dict())
+    else:
+        # 原有逻辑：处理正常state_dict（含多卡module.前缀）
+        if isinstance(checkpoint, dict) and 'module.' in list(checkpoint.keys())[0]:
+            from collections import OrderedDict
+
+            new_state_dict = OrderedDict()
+            for k, v in checkpoint.items():
+                new_state_dict[k.replace('module.', '')] = v
+            model.load_state_dict(new_state_dict)
+        else:
+            model.load_state_dict(checkpoint)
+
+'''
     if isinstance(checkpoint, dict) and 'module.' in list(checkpoint.keys())[0]:
         from collections import OrderedDict
 
@@ -80,8 +92,9 @@ if __name__ == "__main__":
         model.load_state_dict(new_state_dict)
     else:
         model.load_state_dict(checkpoint)
+'''
 
-    model.eval()  # 必须切换到评估模式！否则BatchNorm会出错
+    model.eval()
 
     # -------------------------- 7. 初始化评估指标（和训练时完全一致） --------------------------
     dice_metric = metrics.DiceMetrics()
