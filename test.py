@@ -68,10 +68,8 @@ if __name__ == "__main__":
     checkpoint = torch.load(args.pretrained, map_location=device)
 
     if isinstance(checkpoint, torch.nn.Module):
-        # 如果加载的是模型实例，直接提取其state_dict
         model.load_state_dict(checkpoint.state_dict())
     else:
-        # 原有逻辑：处理正常state_dict（含多卡module.前缀）
         if isinstance(checkpoint, dict) and 'module.' in list(checkpoint.keys())[0]:
             from collections import OrderedDict
 
@@ -82,26 +80,22 @@ if __name__ == "__main__":
         else:
             model.load_state_dict(checkpoint)
 
-'''
-    if isinstance(checkpoint, dict) and 'module.' in list(checkpoint.keys())[0]:
-        from collections import OrderedDict
-
-        new_state_dict = OrderedDict()
-        for k, v in checkpoint.items():
-            new_state_dict[k.replace('module.', '')] = v
-        model.load_state_dict(new_state_dict)
-    else:
-        model.load_state_dict(checkpoint)
-'''
-
     model.eval()
 
-    # -------------------------- 7. 初始化评估指标（和训练时完全一致） --------------------------
+    # if isinstance(checkpoint, dict) and 'module.' in list(checkpoint.keys())[0]:
+    #     from collections import OrderedDict
+    #
+    #     new_state_dict = OrderedDict()
+    #     for k, v in checkpoint.items():
+    #         new_state_dict[k.replace('module.', '')] = v
+    #     model.load_state_dict(new_state_dict)
+    # else:
+    #     model.load_state_dict(checkpoint)
+
     dice_metric = metrics.DiceMetrics()
     total_dice = [0.0] * 4  # TC(肿瘤核心)、ED(水肿)、ET(增强肿瘤)、WT(全肿瘤)
     num_samples = len(test_loader)
 
-    # -------------------------- 8. 测试循环（推理+评估+保存结果） --------------------------
     if args.save_pred:
         os.makedirs(args.output_path, exist_ok=True)
         print(f"预测结果将保存到: {args.output_path}")
