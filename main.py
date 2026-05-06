@@ -108,7 +108,7 @@ def compute_total_loss(model, output, target, ce_dice_criterion, wavelet_criteri
 if __name__ == "__main__":
     date = (datetime.now()).strftime("%Y-%m-%d")
     frame = pd.read_csv("BraTS2020_Training_5folds.csv")
-    for fold in range(5):
+    for fold in range(2,5):
         print("Training fold: ", fold)
         parser = argparse.ArgumentParser()
 
