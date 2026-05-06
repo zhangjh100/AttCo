@@ -89,6 +89,9 @@ if __name__=="__main__":
         elif arg.modelname == "WaveCo2":
             import models.WaveCo2_BraTS as net
             model = net.WaveCo2(inChannel=2, outChannel=4, baseChannel=16)
+        elif arg.modelname == "WaveCo3":
+            import models.WaveCo3_BraTS as net
+            model = net.WaveCo3(inChannel=2, outChannel=4, baseChannel=16)
 
         train_transforms = transforms.Compose([
                         transforms.NormalizeIntensity(),
