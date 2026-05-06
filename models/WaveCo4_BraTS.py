@@ -330,7 +330,7 @@ class WaveCo4(nn.Module):
     """
     """
 
-    def __init__(self, inChannel=2, outChannel=4, baseChannel=24):
+    def __init__(self, inChannel=1, outChannel=4, baseChannel=24):
         super(WaveCo4, self).__init__()
         self.encoder1 = Encoder(inChannel=inChannel, baseChannel=baseChannel)
         self.encoder2 = Encoder(inChannel=inChannel, baseChannel=baseChannel)
@@ -398,7 +398,9 @@ class WaveCo4(nn.Module):
 
 ###
 if __name__ == "__main__":
-    model = WaveCo4(inChannel=2, outChannel=4)
-    x = torch.ones((2, 4, 128, 128, 128))
-    output = model(x)
+    model = WaveCo4(inChannel=1, outChannel=4)
+    # x = torch.ones((2, 4, 128, 128, 128))
+    t1 = torch.ones((1, 1, 128, 128, 128))
+    t2 = torch.ones((1, 1, 128, 128, 128))
+    output = model(t1, t2)
     print(output.shape)
