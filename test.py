@@ -14,6 +14,7 @@ import transforms
 import metrics
 from models.AttCo_BraTS import AttCo  # 导入BraTS模型（AutoPET请替换为AttCo_AutoPET）
 from models.WaveCo_BraTS import WaveCo
+from models.WaveCo2_BraTS import WaveCo2
 
 
 def save_nii(data, path, affine=np.eye(4)):
@@ -61,7 +62,7 @@ if __name__ == "__main__":
     test_set = dataset.MedDataset(args.path_image, listTestPatients, transforms=test_transforms, mode="val")
     test_loader = DataLoader(test_set, batch_size=args.test_batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
-    model = WaveCo(inChannel=2, outChannel=4, baseChannel=16)  # 训练时用24就改成24！
+    model = WaveCo2(inChannel=2, outChannel=4, baseChannel=16)  # 训练时用24就改成24！
     model = model.to(device)
 
     print(f"加载模型权重: {args.pretrained}")
