@@ -108,7 +108,7 @@ def compute_total_loss(model, output, target, ce_dice_criterion, wavelet_criteri
 if __name__ == "__main__":
     date = (datetime.now()).strftime("%Y-%m-%d")
     frame = pd.read_csv("BraTS2020_Training_5folds.csv")
-    for fold in range(2,5):
+    for fold in range(0,5):
         print("Training fold: ", fold)
         parser = argparse.ArgumentParser()
 
@@ -118,7 +118,7 @@ if __name__ == "__main__":
         parser.add_argument('--val_batch_size', type=int, default=1, help='validation batch size')
         parser.add_argument('--is_thop', type=bool, default=True, help='whether calculate FLOPs/Params')
         parser.add_argument('--path_image', type=str,
-                            default="/mnt/data1/zhangjh/datasets/multimodal/BraTS2020/MICCAI_BraTS2020_TrainingData",
+                            default="/datapool/home/ph_teacher1/zhangjh/datasets/multimodal/BraTS2020/MICCAI_BraTS2020_TrainingData",
                             help='')
         parser.add_argument('--pretrained', type=str, default=None, help='')
         parser.add_argument('--modelname', type=str, default="WaveCo_Constraint", help='model name')
@@ -295,7 +295,7 @@ if __name__ == "__main__":
             # 保存最优模型
             if min_loss > loss_val:
                 min_loss = loss_val
-                filename = f"/mnt/data1/zhangjh/AttCo/checkpoint/{arg.dataname}/{arg.modelname}/Fold_{fold}_bs_{arg.train_batch_size}_TC_{dice_val[0]:.4f}_ED_{dice_val[1]:.4f}_ET_{dice_val[2]:.4f}_WT_{dice_val[3]:.4f}.pt"
+                filename = f"/datapool/home/ph_teacher1/zhangjh/WaveCo_Constraint/checkpoint/{arg.dataname}/{arg.modelname}/Fold_{fold}_bs_{arg.train_batch_size}_TC_{dice_val[0]:.4f}_ED_{dice_val[1]:.4f}_ET_{dice_val[2]:.4f}_WT_{dice_val[3]:.4f}.pt"
                 if os.path.exists(filename):
                     os.remove(filename)
                 torch.save(model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict(), filename)
@@ -321,4 +321,4 @@ if __name__ == "__main__":
                 'Loss_val','CE_Dice_val','Wave_Total_val','Wave1_val','Wave2_val','Wave3_val','Wave4_val',
                 'Dice_TC_val','Dice_ED_val','Dice_ET_val','Dice_WT_val'
             ])
-            log_df.to_csv(f"/mnt/data1/zhangjh/AttCo/checkpoint/{arg.dataname}/{arg.modelname}/log_fold_{fold}.csv", index=False)
+            log_df.to_csv(f"/datapool/home/ph_teacher1/zhangjh/WaveCo_Constraint/checkpoint/{arg.dataname}/{arg.modelname}/log_fold_{fold}.csv", index=False)
