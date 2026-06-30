@@ -52,11 +52,6 @@ def init_weights(net, init_type='xavier_uniform_', gain=1.0):
 
 # ===================== 核心修复：正确计算小波损失（提取滤波器） =====================
 def compute_wavelet_loss(model, wavelet_criterion, device):
-    """
-    自动提取模型中 fusion1, fusion2, fusion3, fusion4 的小波滤波器并计算损失
-    权重：fusion1=1.0, fusion2=0.5, fusion3=1/3, fusion4=1/4
-    """
-    # 新增fusion4的权重 1/4
     fusion_weights = [1.0, 0.5, 1/3, 1/4]
     total_wave_loss = 0.0
     loss1 = loss2 = loss3 = loss4 = 0.0  # 新增loss4
@@ -90,7 +85,6 @@ def compute_wavelet_loss(model, wavelet_criterion, device):
     return total_wave_loss, loss1, loss2, loss3, loss4  # 返回loss4
 
 
-# ===================== 总损失计算 =====================
 def compute_total_loss(model, output, target, ce_dice_criterion, wavelet_criterion, wavelet_weight, device):
     # 分割主损失
     ce_dice_loss = ce_dice_criterion(output, target)
@@ -295,7 +289,7 @@ if __name__ == "__main__":
             # 保存最优模型
             if min_loss > loss_val:
                 min_loss = loss_val
-                filename = f"/datapool/home/ph_teacher1/zhangjh/WaveCo_Constraint/checkpoint/{arg.dataname}/{arg.modelname}/Fold_{fold}_bs_{arg.train_batch_size}_TC_{dice_val[0]:.4f}_ED_{dice_val[1]:.4f}_ET_{dice_val[2]:.4f}_WT_{dice_val[3]:.4f}.pt"
+                filename = f"/datapool/home/ph_teacher1/zhangjh/AttCo/checkpoint/{arg.dataname}/{arg.modelname}/Fold_{fold}_bs_{arg.train_batch_size}_TC_{dice_val[0]:.4f}_ED_{dice_val[1]:.4f}_ET_{dice_val[2]:.4f}_WT_{dice_val[3]:.4f}.pt"
                 if os.path.exists(filename):
                     os.remove(filename)
                 torch.save(model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict(), filename)
