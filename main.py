@@ -50,9 +50,9 @@ def init_weights(net, init_type='xavier_uniform_', gain=1.0):
     net.apply(init_func)
 
 
-# ===================== 核心修复：正确计算小波损失（提取滤波器） =====================
 def compute_wavelet_loss(model, wavelet_criterion, device):
-    fusion_weights = [1.0, 0.5, 1/3, 1/4]
+    # fusion_weights = [1.0, 0.5, 1/3, 1/4]
+    fusion_weights = [1.0, 1.0, 1.0, 1.0]
     total_wave_loss = 0.0
     loss1 = loss2 = loss3 = loss4 = 0.0  # 新增loss4
 
@@ -315,4 +315,4 @@ if __name__ == "__main__":
                 'Loss_val','CE_Dice_val','Wave_Total_val','Wave1_val','Wave2_val','Wave3_val','Wave4_val',
                 'Dice_TC_val','Dice_ED_val','Dice_ET_val','Dice_WT_val'
             ])
-            log_df.to_csv(f"/datapool/home/ph_teacher1/zhangjh/WaveCo_Constraint/checkpoint/{arg.dataname}/{arg.modelname}/log_fold_{fold}.csv", index=False)
+            log_df.to_csv(f"/datapool/home/ph_teacher1/zhangjh/AttCo/checkpoint/{arg.dataname}/{arg.modelname}/log_fold_{fold}.csv", index=False)

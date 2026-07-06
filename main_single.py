@@ -95,6 +95,9 @@ if __name__=="__main__":
         elif arg.modelname == "WaveCo4":
             import models.WaveCo4_BraTS as net
             model = net.WaveCo4(inChannel=1, outChannel=4, baseChannel=16)
+        elif arg.modelname == "WaveCo_Constraint":
+            import models.WaveCo4_BraTS as net
+            model = net.WaveCo4(inChannel=1, outChannel=4, baseChannel=16)
 
         train_transforms = transforms.Compose([
                         transforms.NormalizeIntensity(),
