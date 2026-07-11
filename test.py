@@ -13,18 +13,15 @@ import dataset
 import transforms
 import metrics
 from models.AttCo_BraTS import AttCo  # 导入BraTS模型（AutoPET请替换为AttCo_AutoPET）
-from models.WaveCo_BraTS import WaveCo
-from models.WaveCo2_BraTS import WaveCo2
+from models.WaveCo_Constraint_BraTS import WaveCo_Constraint
 
 
 def save_nii(data, path, affine=np.eye(4)):
-    """将3D数组保存为医学影像标准nii.gz格式，用于ITK-SNAP/3D Slicer查看"""
     img = nib.Nifti1Image(data, affine)
     nib.save(img, path)
 
 
 if __name__ == "__main__":
-    # -------------------------- 1. 命令行参数（完全兼容服务器调用） --------------------------
     parser = argparse.ArgumentParser(description="WaveCo 模型测试脚本")
     parser.add_argument('--modelname', type=str, default="WaveCo", help='模型名称')
     parser.add_argument('--dataname', type=str, default="BraTS2020", help='数据集名称')
@@ -39,30 +36,23 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # -------------------------- 2. 设备配置（服务器多卡适配） --------------------------
     os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"使用设备: {device}")
 
-    # -------------------------- 3. 数据预处理（必须和训练时VAL的变换完全一致！） --------------------------
-    # 绝对不能用train的随机增强，否则结果完全错误
     test_transforms = transforms.Compose([
         transforms.NormalizeIntensity(),
         transforms.RandomCrop(margin=(0, 0, 0), target_size=(128, 128, 128), original_size=(155, 240, 240)),
         transforms.ToTensor()
     ])
 
-    # -------------------------- 4. 加载测试数据集 --------------------------
     frame = pd.read_csv(args.csv_path)
-    # 方式1：加载对应折的验证集（用于5折模型评估）
     listTestPatients = list(frame["ID"][frame[f"Fold_{args.fold}"] == 0])
-    # 方式2：加载独立测试集（无CSV，直接遍历文件夹，取消注释即可用）
-    # listTestPatients = sorted([d for d in os.listdir(args.path_image) if os.path.isdir(os.path.join(args.path_image, d))])
 
     test_set = dataset.MedDataset(args.path_image, listTestPatients, transforms=test_transforms, mode="val")
     test_loader = DataLoader(test_set, batch_size=args.test_batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
-    model = WaveCo2(inChannel=2, outChannel=4, baseChannel=16)  # 训练时用24就改成24！
+    model = WaveCo_Constraint(inChannel=2, outChannel=4, baseChannel=16)  # 训练时用24就改成24！
     model = model.to(device)
 
     print(f"加载模型权重: {args.pretrained}")
@@ -94,23 +84,20 @@ if __name__ == "__main__":
     #     model.load_state_dict(checkpoint)
 
     dice_metric = metrics.DiceMetrics()
-    total_dice = [0.0] * 4  # TC(肿瘤核心)、ED(水肿)、ET(增强肿瘤)、WT(全肿瘤)
+    total_dice = [0.0] * 4
     num_samples = len(test_loader)
 
     if args.save_pred:
         os.makedirs(args.output_path, exist_ok=True)
         print(f"预测结果将保存到: {args.output_path}")
 
-    with torch.no_grad():  # 禁用梯度，节省显存+加速推理
+    with torch.no_grad():
         for idx, sample in enumerate(tqdm(test_loader, desc="测试进度")):
-            # 加载数据
             input_img = sample["input"].to(device)
             target = sample["target"].type(torch.LongTensor).to(device)
-            patient_id = sample["id"][0]  # 获取患者ID，用于结果命名
+            patient_id = sample["id"][0]
 
-            # 模型推理
             output = model(input_img)
-            # 后处理：取argmax得到最终分割掩码（4类→1类）
             pred = torch.argmax(output, dim=1).squeeze(0).cpu().numpy()
             target_np = target.squeeze(0).cpu().numpy()
 
@@ -119,13 +106,9 @@ if __name__ == "__main__":
             for i in range(4):
                 total_dice[i] += dice[i].item()
 
-            # 保存预测结果（nii.gz格式，医学影像标准）
             if args.save_pred:
                 save_nii(pred, os.path.join(args.output_path, f"{patient_id}_pred.nii.gz"))
-                # 可选：保存真实标签用于对比
-                # save_nii(target_np, os.path.join(args.output_path, f"{patient_id}_gt.nii.gz"))
 
-    # -------------------------- 9. 计算平均指标并输出 --------------------------
     avg_dice = [d / num_samples for d in total_dice]
     print("\n" + "=" * 60)
     print(f"【Fold {args.fold} 测试结果】")
