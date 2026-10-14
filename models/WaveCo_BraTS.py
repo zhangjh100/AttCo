@@ -332,8 +332,6 @@ class WaveletBlock3D(nn.Module):
         return y + x * self.gamma
 
 class WaveCo(nn.Module):
-    """
-    """
 
     def __init__(self, inChannel=2, outChannel=4, baseChannel=24):
         super(WaveCo, self).__init__()
@@ -363,7 +361,6 @@ class WaveCo(nn.Module):
     def forward(self, x):
         flair, t1, t1ce, t2 = x[:, :1, :, :, :], x[:, 1:2, :, :, :], x[:, 2:3, :, :, :], x[:, 3:, :, :, :]
         x_in1, x_in2 = torch.cat((t1, t1ce), dim=1), torch.cat((flair, t2), dim=1)
-        # x_in1, x_in2 = torch.cat((t1, flair), dim=1), torch.cat((t1ce, t2), dim=1)
         # encoding path
         h_out_1 = self.encoder1(x_in1)
         h_out_2 = self.encoder2(x_in2)
@@ -377,12 +374,7 @@ class WaveCo(nn.Module):
         x2 = self.fusion2(x2)
         x3 = self.fusion3(x3)
         x4 = self.fusion4(x4)
-        # x5 = torch.cat((h_out_1[4], h_out_2[4]), dim=1)
-        # print(h_out_1[4].shape)
-        # h11, h22 = self.unimodalInteraction(h_out_1[4], h_out_2[4])
-        # h12, h21 = self.crossInteraction(h_out_1[4], h_out_2[4])
         x5 = torch.cat((h_out_1[4], h_out_2[4]), dim=1)
-        # x5 = torch.cat((h11, h12, h21, h22), dim=1)
 
         # decoding + concat path
         d5 = self.Up5(x5)

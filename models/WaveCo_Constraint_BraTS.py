@@ -128,6 +128,7 @@ class Encoder(nn.Module):
     def __init__(self, inChannel=2, baseChannel=24):
         super(Encoder, self).__init__()
         self.Maxpool = nn.MaxPool3d(kernel_size=2, stride=2)
+        self.Avgpool = nn.AvgPool3d(kernel_size=2, stride=2)
 
         self.Conv1 = nn.Sequential(
             BasicBlock(inChannel, baseChannel, stride=1, downsample=True),
@@ -159,10 +160,10 @@ class Encoder(nn.Module):
         x3 = self.Maxpool(x2)
         x3 = self.Conv3(x3)
 
-        x4 = self.Maxpool(x3)
+        x4 = self.Avgpool(x3)
         x4 = self.Conv4(x4)
 
-        x5 = self.Maxpool(x4)
+        x5 = self.Avgpool(x4)
         x5 = self.Conv5(x5)
         return x1, x2, x3, x4, x5
 
@@ -224,7 +225,6 @@ class LWN3D(nn.Module):
         lo = torch.tensor(lo, dtype=torch.float32)
         hi = torch.tensor(hi, dtype=torch.float32)
 
-        # 3D 小波 = 1D 滤波器外积组合，生成 3D 小波 8 种核 (标准3D DWT 8子带)
         kernels = []
         combinations = [
             (lo, lo, lo),  # LLL → 低频 (轮廓)
@@ -247,7 +247,6 @@ class LWN3D(nn.Module):
         kernel_size = self.kernel.shape[2:]
         padding = tuple((k - 1) // 2 for k in kernel_size)
 
-        # 3D 分组小波卷积 (groups=C → 每个通道独立4个子带小波变换)
         out = F.conv3d(
             x,
             self.kernel,
@@ -256,76 +255,14 @@ class LWN3D(nn.Module):
             groups=self.channels
         )
 
-        # 输出：通道数 ×4，空间尺寸 ÷2 (标准3D DWT结果)
         return out
 
     def get_filters(self):
-        # 分组：每个通道对应4个滤波器 (C*4, 1, K, K, K)
-        single_channel_filters = self.kernel[:4]  # 取第一个通道的滤波器代表所有通道
-        lo = single_channel_filters[0]  # LLL 低通
-        hi = single_channel_filters[1]  # HLL 高通（任选一个高通即可）
+        single_channel_filters = self.kernel[:4]
+        lo = single_channel_filters[0]
+        hi = single_channel_filters[1]
         return lo, hi
 
-
-class WaveletLoss(nn.Module):
-    def __init__(self, device='cuda', level=None):
-        super().__init__()
-        self.device = device
-        self.level = level
-
-    def perfect_reconstruction_loss(self, lo, hi):
-        """
-        完美重构损失 (Perfect Reconstruction Loss)
-        论文核心约束：低通+高通滤波器满足双正交小波重构条件
-        """
-        # 展平滤波器为一维，避免多维度求和错误
-        lo_flat = lo.flatten()
-        hi_flat = hi.flatten()
-        sum_lo = torch.sum(lo_flat)
-        sum_hi = torch.sum(hi_flat)
-        loss = torch.pow(sum_lo + sum_hi - 2.0, 2)
-        return loss
-
-    def alias_cancellation_loss(self, lo, hi):
-        """
-        混叠消除损失 (Alias Cancellation Loss)
-        论文核心约束：消除小波变换的频率混叠
-        """
-        # 展平滤波器为一维
-        lo_flat = lo.flatten()
-        hi_flat = hi.flatten()
-
-        # 为每个滤波器单独生成交替符号掩码 (-1)^k
-        k_lo = torch.arange(0, lo_flat.numel(), device=self.device)
-        mask_lo = torch.pow(-1.0, k_lo)
-
-        k_hi = torch.arange(0, hi_flat.numel(), device=self.device)
-        mask_hi = torch.pow(-1.0, k_hi)
-
-        # 计算交替加权和，目标值 = 0
-        alt_lo = torch.sum(lo_flat * mask_lo)
-        alt_hi = torch.sum(hi_flat * mask_hi)
-        loss = torch.pow(alt_lo + alt_hi, 2)
-        return loss
-
-    def forward(self, lo_filter, hi_filter):
-        """
-        输入：
-            lo_filter: 可学习3D小波**低通滤波器**权重 (LLL)
-            hi_filter: 可学习3D小波**高通滤波器**权重
-        输出：
-            total_wavelet_loss: 论文小波总约束损失
-        """
-        lo = lo_filter.to(self.device)
-        hi = hi_filter.to(self.device)
-
-        # 计算两个子损失
-        loss_perfect = self.perfect_reconstruction_loss(lo, hi)
-        loss_alias = self.alias_cancellation_loss(lo, hi)
-
-        # 论文总小波损失 = 两者相加
-        total_loss = loss_perfect + loss_alias
-        return total_loss
 
 class WaveletBlock3D(nn.Module):
     def __init__(self, c, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.):
@@ -402,6 +339,7 @@ class WaveCo_Constraint(nn.Module):
         self.fusion2 = WaveletBlock3D(c=baseChannel * 4, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
         self.fusion3 = WaveletBlock3D(c=baseChannel * 8, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
         self.fusion4 = WaveletBlock3D(c=baseChannel * 16, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
+        self.fusion5 = WaveletBlock3D(c=baseChannel * 32, DW_Expand=8, FFN_Expand=2, drop_out_rate=0.)
 
         # decoder
         self.Up5 = up_conv(ch_in=baseChannel * 8 * 4, ch_out=baseChannel * 8)
@@ -420,9 +358,9 @@ class WaveCo_Constraint(nn.Module):
 
     def forward(self, x):
         flair, t1, t1ce, t2 = x[:, :1, :, :, :], x[:, 1:2, :, :, :], x[:, 2:3, :, :, :], x[:, 3:, :, :, :]
-        x_in1, x_in2 = torch.cat((t1, t2), dim=1), torch.cat((flair, t1ce), dim=1)
-        # x_in1, x_in2 = torch.cat((t1, flair), dim=1), torch.cat((t1ce, t2), dim=1)
-        # encoding path
+        x_in1, x_in2 = torch.cat((t1, t2), dim=1), torch.cat((flair, t1ce), dim=1) # 一路建模基础解剖和一般组织结构，一路建模肿瘤显著区域
+        # x_in1, x_in2 = torch.cat((t1, t1ce), dim=1), torch.cat((t2, flair), dim=1) # 两路分别处理具有相近成像机制的模态
+
         h_out_1 = self.encoder1(x_in1)
         h_out_2 = self.encoder2(x_in2)
 
@@ -430,12 +368,13 @@ class WaveCo_Constraint(nn.Module):
         x2 = torch.cat((h_out_1[1], h_out_2[1]), dim=1)
         x3 = torch.cat((h_out_1[2], h_out_2[2]), dim=1)
         x4 = torch.cat((h_out_1[3], h_out_2[3]), dim=1)
+        x5 = torch.cat((h_out_1[4], h_out_2[4]), dim=1)
 
         x1 = self.fusion1(x1)
         x2 = self.fusion2(x2)
         x3 = self.fusion3(x3)
         x4 = self.fusion4(x4)
-        x5 = torch.cat((h_out_1[4], h_out_2[4]), dim=1)
+        x5 = self.fusion4(x5)
 
         # decoding + concat path
         d5 = self.Up5(x5)

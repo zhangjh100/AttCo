@@ -5,16 +5,9 @@ import torch
 import torch.nn as nn
 import argparse
 from tqdm import tqdm
-from datetime import datetime
-import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
-import losses, transforms, dataset, metrics, utils
+import losses, transforms, dataset, metrics
 from torch.nn import init
-
-# 导入你的小波损失
-from models.WaveCo_Constraint_BraTS import WaveletLoss
-losses.WaveletLoss = WaveletLoss
-
 
 def param_network(model):
     """Print out the network information."""
@@ -50,95 +43,77 @@ def init_weights(net, init_type='xavier_uniform_', gain=1.0):
     net.apply(init_func)
 
 
-def compute_wavelet_loss(model, wavelet_criterion, device):
-    # fusion_weights = [1.0, 0.5, 1/3, 1/4]
-    fusion_weights = [1.0, 1.0, 1.0, 1.0]
-    total_wave_loss = 0.0
-    loss1 = loss2 = loss3 = loss4 = 0.0  # 新增loss4
-
-    # 处理多卡 DataParallel
-    model_core = model.module if isinstance(model, nn.DataParallel) else model
-
-    # 遍历4个fusion模块（新增fusion4）
-    for idx, fusion_name in enumerate(['fusion1', 'fusion2', 'fusion3', 'fusion4']):
-        if hasattr(model_core, fusion_name):
-            fusion_module = getattr(model_core, fusion_name)
-            # 找到LWN3D小波模块
-            for name, module in fusion_module.named_modules():
-                if 'LWN3D' in str(type(module)) and hasattr(module, 'get_filters'):
-                    lo, hi = module.get_filters()
-                    w_loss = wavelet_criterion(lo, hi)
-                    # 加权
-                    weighted_loss = fusion_weights[idx] * w_loss
-                    total_wave_loss += weighted_loss
-                    # 记录单个损失
-                    if idx == 0:
-                        loss1 = w_loss.item()
-                    elif idx == 1:
-                        loss2 = w_loss.item()
-                    elif idx == 2:
-                        loss3 = w_loss.item()
-                    elif idx == 3:  # 新增fusion4的损失记录
-                        loss4 = w_loss.item()
-                    break
-
-    return total_wave_loss, loss1, loss2, loss3, loss4  # 返回loss4
+def parse_gpu_ids(value):
+    try:
+        ids = [int(part.strip()) for part in value.split(',')]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("GPU ids must be comma-separated integers") from exc
+    if not ids or any(i < 0 for i in ids) or len(ids) != len(set(ids)):
+        raise argparse.ArgumentTypeError("GPU ids must be distinct non-negative integers")
+    return ids
 
 
-def compute_total_loss(model, output, target, ce_dice_criterion, wavelet_criterion, wavelet_weight, device):
-    # 分割主损失
-    ce_dice_loss = ce_dice_criterion(output, target)
-
-    # 小波约束损失（适配4个fusion）
-    wave_loss, w1, w2, w3, w4 = compute_wavelet_loss(model, wavelet_criterion, device)
-    total_wave_loss = wavelet_weight * wave_loss
-
-    # 总损失
-    total_loss = ce_dice_loss + total_wave_loss
-
-    return total_loss, ce_dice_loss, total_wave_loss, [w1, w2, w3, w4]  # 返回4个小波损失
+def select_device(mode, gpu_ids):
+    if mode == 'cpu':
+        return torch.device('cpu'), []
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable; select --train_mode cpu to run on CPU")
+    if mode == 'single' and len(gpu_ids) != 1:
+        raise ValueError("single mode requires exactly one GPU id")
+    if mode == 'multi' and len(gpu_ids) < 2:
+        raise ValueError("multi mode requires at least two GPU ids")
+    count = torch.cuda.device_count()
+    if any(i >= count for i in gpu_ids):
+        raise ValueError(f"Requested {gpu_ids}, but only {count} CUDA devices are visible")
+    torch.cuda.set_device(gpu_ids[0])
+    return torch.device(f'cuda:{gpu_ids[0]}'), gpu_ids
 
 
 if __name__ == "__main__":
-    date = (datetime.now()).strftime("%Y-%m-%d")
-    frame = pd.read_csv("BraTS2020_Training_5folds.csv")
-    for fold in range(0,5):
-        print("Training fold: ", fold)
-        parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser()
 
-        parser.add_argument('--epochs', type=int, default=400, help='epoch number')
-        parser.add_argument('--lrate', type=float, default=0.001, help='learning rate')
-        parser.add_argument('--train_batch_size', type=int, default=4, help='training batch size')
-        parser.add_argument('--val_batch_size', type=int, default=1, help='validation batch size')
-        parser.add_argument('--is_thop', type=bool, default=True, help='whether calculate FLOPs/Params')
-        parser.add_argument('--path_image', type=str,
-                            default="/datapool/home/ph_teacher1/zhangjh/datasets/multimodal/BraTS2020/MICCAI_BraTS2020_TrainingData",
-                            help='')
-        parser.add_argument('--pretrained', type=str, default=None, help='')
-        parser.add_argument('--modelname', type=str, default="WaveCo_Constraint", help='model name')
-        parser.add_argument('--dataname', type=str, default="BraTS2020", help='dataset name')
-        # 小波损失权重
-        parser.add_argument('--wavelet_loss_weight', type=float, default=1.0, help='小波损失全局权重')
+    parser.add_argument('--epochs', type=int, default=400, help='epoch number')
+    parser.add_argument('--lrate', type=float, default=0.001, help='learning rate')
+    parser.add_argument('--train_batch_size', type=int, default=4, help='training batch size')
+    parser.add_argument('--val_batch_size', type=int, default=1, help='validation batch size')
+    parser.add_argument('--is_thop', type=bool, default=True, help='whether calculate FLOPs/Params')
+    parser.add_argument('--path_image', type=str,
+                        default="/datapool/home/ph_teacher1/zhangjh/datasets/multimodal/BraTS2020/MICCAI_BraTS2020_TrainingData",
+                        help='')
+    parser.add_argument('--pretrained', type=str, default=None, help='')
+    parser.add_argument('--modelname', type=str, default="Wave", help='model name')
+    parser.add_argument('--dataname', type=str, default="BraTS2020", help='dataset name')
+    parser.add_argument('--train_mode', choices=('single', 'multi', 'cpu'), default='single')
+    parser.add_argument('--gpu_ids', type=parse_gpu_ids, default=[0],
+                        help='Visible GPU ids, e.g. 0 or 0,1; batch size is total across GPUs')
+    parser.add_argument('--folds', type=int, nargs='+', default=list(range(5)))
+    parser.add_argument('--csv_path', default='BraTS2020_Training_5folds.csv')
+    parser.add_argument('--checkpoint_dir', default='./checkpoint')
 
-        arg = parser.parse_args()
+    arg = parser.parse_args()
 
+    if any(fold not in range(5) for fold in arg.folds) or len(set(arg.folds)) != len(arg.folds):
+        parser.error("--folds must contain distinct values from 0 to 4")
+    frame = pd.read_csv(arg.csv_path)
+    for fold in arg.folds:
+        print("Training fold:", fold)
         np.random.seed(100)
         torch.manual_seed(100)
 
-        # 设备配置
-        if torch.cuda.is_available():
-            device = torch.device('cuda')
-            gpu_ids = [0, 1]
-            assert len(gpu_ids) <= torch.cuda.device_count()
-            torch.cuda.set_device(gpu_ids[0])
-        else:
-            device = torch.device('cpu')
-            gpu_ids = []
+        device, gpu_ids = select_device(arg.train_mode, arg.gpu_ids)
+        if arg.train_mode == 'multi' and arg.train_batch_size < len(gpu_ids):
+            raise ValueError("Total training batch size must be at least the GPU count")
+        print(f"Mode: {arg.train_mode}; device: {device}; GPU ids: {gpu_ids}")
+        save_dir = os.path.join(arg.checkpoint_dir, arg.dataname, arg.modelname)
+        os.makedirs(save_dir, exist_ok=True)
 
         # 模型初始化
         if arg.modelname == "WaveCo_Constraint":
             import models.WaveCo_Constraint_BraTS as net
             model = net.WaveCo_Constraint(inChannel=2, outChannel=4, baseChannel=16)
+
+        else:
+            raise ValueError(f"Unsupported model: {arg.modelname}")
 
         # 数据变换
         train_transforms = transforms.Compose([
@@ -158,97 +133,65 @@ if __name__ == "__main__":
         val_set = dataset.MedDataset(arg.path_image, listValPatients, transforms=val_transforms, mode="val")
 
         # 数据加载器
-        train_loader = DataLoader(train_set, batch_size=arg.train_batch_size, shuffle=True, num_workers=8, pin_memory=True)
-        val_loader = DataLoader(val_set, batch_size=arg.val_batch_size, shuffle=False, num_workers=4, pin_memory=True)
+        train_loader = DataLoader(train_set, batch_size=arg.train_batch_size, shuffle=True, num_workers=8, pin_memory=(device.type == "cuda"))
+        val_loader = DataLoader(val_set, batch_size=arg.val_batch_size, shuffle=False, num_workers=4, pin_memory=(device.type == "cuda"))
         dataloaders = {'train': train_loader, 'val': val_loader}
 
-        # 模型部署
-        model = model.to(device)
-        if len(gpu_ids) > 1:
-            model = nn.DataParallel(model, device_ids=gpu_ids)
-
-        # 预训练权重
+        # Load on the unwrapped model: both single/multi checkpoints are supported.
         if arg.pretrained is not None:
-            print("Loading pretrained model")
-            pretrain = torch.load(arg.pretrained, map_location=device)
-            model.load_state_dict(pretrain, strict=False)
+            pretrain = torch.load(arg.pretrained, map_location='cpu')
+            if isinstance(pretrain, dict) and 'state_dict' in pretrain:
+                pretrain = pretrain['state_dict']
+            pretrain = {k.removeprefix('module.'): v for k, v in pretrain.items()}
+            model.load_state_dict(pretrain, strict=True)
+            print("Loaded pretrained model")
         else:
             print("Training from Scratch")
-            if isinstance(model, nn.DataParallel):
-                model.module.apply(init_weights)
-            else:
-                model.apply(init_weights)
+            init_weights(model)  # Exactly once, rather than nested apply calls.
+        model = model.to(device)
+        if arg.train_mode == 'multi':
+            model = nn.DataParallel(model, device_ids=gpu_ids, output_device=gpu_ids[0])
 
         param_network(model)
         optimizer = torch.optim.Adam(model.parameters(), lr=arg.lrate, betas=(0.9, 0.99))
 
         # 损失函数
         criterion = losses.CE_GeneralizedSoftDiceLoss().to(device)
-        wavelet_criterion = WaveletLoss(device=device).to(device)
         dice_metric = metrics.DiceMetrics()
 
         min_loss = np.inf
         log_data = []
 
         for epoch in range(arg.epochs):
-            # 训练指标初始化（新增wave4_train）
             loss_train = 0.0
-            ce_dice_train = 0.0
-            wave_total_train = 0.0
-            wave1_train = 0.0
-            wave2_train = 0.0
-            wave3_train = 0.0
-            wave4_train = 0.0  # 新增fusion4训练损失
             dice_train = [0]*4
 
             model.train()
             for sample in tqdm(dataloaders['train']):
                 input, target = sample["input"].to(device), sample["target"].long().to(device)
-                output = model(input)  # 模型单输出，无报错！
+                optimizer.zero_grad(set_to_none=True)
+                output = model(input)
 
-                # 计算损失
-                loss, ce_loss, wave_loss, wave_list = compute_total_loss(
-                    model, output, target, criterion, wavelet_criterion, arg.wavelet_loss_weight, device
-                )
+                loss = criterion(output, target)
 
-                optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-                # 累计损失（新增wave4_train）
                 loss_train += loss.item()
-                ce_dice_train += ce_loss.item()
-                wave_total_train += wave_loss.item()
-                wave1_train += wave_list[0]
-                wave2_train += wave_list[1]
-                wave3_train += wave_list[2]
-                wave4_train += wave_list[3]  # 累计fusion4的小波损失
 
                 # Dice
-                dice = dice_metric(output, target)
+                dice = dice_metric(output.detach(), target)
                 for i in range(4):
                     dice_train[i] += dice[i].item()
 
-            # 训练集平均（新增wave4_train）
             n_train = len(dataloaders['train'])
+            if n_train == 0:
+                raise ValueError("Training loader is empty")
             loss_train /= n_train
-            ce_dice_train /= n_train
-            wave_total_train /= n_train
-            wave1_train /= n_train
-            wave2_train /= n_train
-            wave3_train /= n_train
-            wave4_train /= n_train  # 新增fusion4平均
             for i in range(4):
                 dice_train[i] /= n_train
 
-            # 验证（新增wave4_val）
             loss_val = 0.0
-            ce_dice_val = 0.0
-            wave_total_val = 0.0
-            wave1_val = 0.0
-            wave2_val = 0.0
-            wave3_val = 0.0
-            wave4_val = 0.0  # 新增fusion4验证损失
             dice_val = [0]*4
 
             model.eval()
@@ -257,62 +200,34 @@ if __name__ == "__main__":
                     input, target = sample["input"].to(device), sample["target"].long().to(device)
                     output = model(input)
 
-                    loss, ce_loss, wave_loss, wave_list = compute_total_loss(
-                        model, output, target, criterion, wavelet_criterion, arg.wavelet_loss_weight, device
-                    )
+                    loss = criterion(output, target)
 
-                    # 累计验证损失（新增wave4_val）
                     loss_val += loss.item()
-                    ce_dice_val += ce_loss.item()
-                    wave_total_val += wave_loss.item()
-                    wave1_val += wave_list[0]
-                    wave2_val += wave_list[1]
-                    wave3_val += wave_list[2]
-                    wave4_val += wave_list[3]  # 累计fusion4验证损失
 
-                    dice = dice_metric(output, target)
+                    dice = dice_metric(output.detach(), target)
                     for i in range(4):
                         dice_val[i] += dice[i].item()
 
-            # 验证集平均（新增wave4_val）
             n_val = len(dataloaders['val'])
+            if n_val == 0:
+                raise ValueError("Validation loader is empty")
             loss_val /= n_val
-            ce_dice_val /= n_val
-            wave_total_val /= n_val
-            wave1_val /= n_val
-            wave2_val /= n_val
-            wave3_val /= n_val
-            wave4_val /= n_val  # 新增fusion4验证平均
             for i in range(4):
                 dice_val[i] /= n_val
 
             # 保存最优模型
             if min_loss > loss_val:
                 min_loss = loss_val
-                filename = f"/datapool/home/ph_teacher1/zhangjh/AttCo/checkpoint/{arg.dataname}/{arg.modelname}/Fold_{fold}_bs_{arg.train_batch_size}_TC_{dice_val[0]:.4f}_ED_{dice_val[1]:.4f}_ET_{dice_val[2]:.4f}_WT_{dice_val[3]:.4f}.pt"
-                if os.path.exists(filename):
-                    os.remove(filename)
+                filename = os.path.join(save_dir, f'best_fold_{fold}.pt')
                 torch.save(model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict(), filename)
                 print("Saving model: ", filename)
 
-            # 打印日志（新增Wave4）
-            print(f"[Epoch {epoch}]")
-            print(f"Train | CE-Dice: {ce_dice_train:.4f} | Wave1: {wave1_train:.4f} | Wave2: {wave2_train:.4f} | Wave3: {wave3_train:.4f} | Wave4: {wave4_train:.4f} | Total: {loss_train:.4f}")
-            print(f"Val   | CE-Dice: {ce_dice_val:.4f} | Wave1: {wave1_val:.4f} | Wave2: {wave2_val:.4f} | Wave3: {wave3_val:.4f} | Wave4: {wave4_val:.4f} | Total: {loss_val:.4f}")
-            print(f"Dice TC: {dice_train[0]:.4f} | ED: {dice_train[1]:.4f} | ET: {dice_train[2]:.4f} | WT: {dice_train[3]:.4f}")
-
-            # 保存日志（新增Wave4_train/Wave4_val列）
-            log_data.append([
-                epoch, loss_train, ce_dice_train, wave_total_train, wave1_train, wave2_train, wave3_train, wave4_train,
-                dice_train[0], dice_train[1], dice_train[2], dice_train[3],
-                loss_val, ce_dice_val, wave_total_val, wave1_val, wave2_val, wave3_val, wave4_val,
-                dice_val[0], dice_val[1], dice_val[2], dice_val[3]
-            ])
-
-            log_df = pd.DataFrame(log_data, columns=[
-                'Epoch','Loss_train','CE_Dice_train','Wave_Total_train','Wave1_train','Wave2_train','Wave3_train','Wave4_train',
-                'Dice_TC_train','Dice_ED_train','Dice_ET_train','Dice_WT_train',
-                'Loss_val','CE_Dice_val','Wave_Total_val','Wave1_val','Wave2_val','Wave3_val','Wave4_val',
-                'Dice_TC_val','Dice_ED_val','Dice_ET_val','Dice_WT_val'
-            ])
-            log_df.to_csv(f"/datapool/home/ph_teacher1/zhangjh/AttCo/checkpoint/{arg.dataname}/{arg.modelname}/log_fold_{fold}.csv", index=False)
+            print(f"[Epoch {epoch + 1}/{arg.epochs}] Train loss: {loss_train:.4f} | Val loss: {loss_val:.4f}")
+            print("Train Dice:", dict(zip(('TC', 'ED', 'ET', 'WT'), dice_train)))
+            print("Val Dice:", dict(zip(('TC', 'ED', 'ET', 'WT'), dice_val)))
+            log_data.append([epoch + 1, loss_train, *dice_train, loss_val, *dice_val])
+            columns = ['Epoch', 'Loss_train', 'Dice_TC_train', 'Dice_ED_train',
+                       'Dice_ET_train', 'Dice_WT_train', 'Loss_val', 'Dice_TC_val',
+                       'Dice_ED_val', 'Dice_ET_val', 'Dice_WT_val']
+            pd.DataFrame(log_data, columns=columns).to_csv(
+                os.path.join(save_dir, f'log_fold_{fold}.csv'), index=False)

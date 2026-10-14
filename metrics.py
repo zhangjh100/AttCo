@@ -1,70 +1,76 @@
-import torch 
+import torch
 import torch.nn as nn
 from scipy import ndimage
-import numpy as np 
+import numpy as np
 
-class DiceMetrics(nn.Module): ### for BraTS dataset
-    def __init__(self):  #weight=None, size_average=True):
-        super(DiceMetrics, self).__init__()
-        self.smooth = 1e-12
 
-    def dice(self, probs, labels):
-        N = len(probs)
-        m1  = probs.view (N, -1)
-        m2  = labels.view(N, -1)
-        
-        intersection = (m1 * m2).sum(dim=1)
-        score = (2.0 * intersection) / (m1.sum(dim=1) + m2.sum(dim=1) + self.smooth)
-        return score.mean()
+class DiceMetrics(nn.Module):
+    """BraTS labels 0/1/2/3 (raw 4 remapped to 3); returns TC, ED, ET, WT.
 
+    empty_score=0 preserves the original both-empty convention. Slice means
+    are training diagnostics and are not equivalent to patient-volume Dice.
+    """
+
+    def __init__(self, empty_score=0.0, ignore_lb=255):
+        super().__init__()
+        self.empty_score, self.ignore_lb = empty_score, ignore_lb
+
+    def dice(self, pred, target):
+        pred, target = pred.flatten(1).float(), target.flatten(1).float()
+        denom = pred.sum(1) + target.sum(1)
+        score = 2 * (pred * target).sum(1) / denom.clamp_min(1)
+        return torch.where(denom > 0, score, torch.full_like(score, self.empty_score)).mean()
+
+    @torch.no_grad()
     def forward(self, logits, labels):
-        """
-        logits: B x C x D x H x W
-        labels: B x D x H x W
-        """
-        C = logits.shape[1]
-        probs = torch.argmax(logits, dim=1)
-        # print(torch.unique(probs), torch.unique(labels))
-        probs = torch.eye(C).to(probs.device)[probs] # B x D x H x W x C
-        labels = torch.eye(C).to(probs.device)[labels] # B x D x H x W x C
-        # dice_NCR = self.dice(probs[:,:,:,:,1], labels[:,:,:,:,1])
-        dice_ED = self.dice(probs[:,:,:,:,2], labels[:,:,:,:,2])
-        dice_ET = self.dice(probs[:,:,:,:,3], labels[:,:,:,:,3])
-        dice_TC = self.dice(probs[:,:,:,:,1]+ probs[:,:,:,:,3], labels[:,:,:,:,1]+labels[:,:,:,:,3])
-        dice_WT = self.dice(probs[:,:,:,:,1:].sum(-1), labels[:,:,:,:,1:].sum(-1))
-        # print(dice_TC, dice_ED, dice_ET, dice_WT)
-        return dice_TC, dice_ED, dice_ET, dice_WT
-    
-class DiceMetric_v2(nn.Module): ### for BraTS dataset
-    def __init__(self):  #weight=None, size_average=True):
+        if logits.ndim not in (4, 5) or logits.shape[1] != 4:
+            raise ValueError('Expected four-class 2D or 3D logits')
+        if labels.ndim == logits.ndim and labels.shape[1] == 1:
+            labels = labels[:, 0]
+        pred = logits.argmax(1)
+        if labels.shape != pred.shape:
+            raise ValueError('Center label shape must match predicted class map')
+        labels = labels.to(pred.device)
+        valid = labels != self.ignore_lb
+        if ((labels[valid] < 0) | (labels[valid] > 3)).any():
+            raise ValueError('Expected remapped BraTS labels 0,1,2,3')
+        regions = (
+            ((pred == 1) | (pred == 3), (labels == 1) | (labels == 3)),
+            (pred == 2, labels == 2),
+            (pred == 3, labels == 3),
+            (pred > 0, labels > 0),
+        )
+        return tuple(self.dice(p & valid, t & valid) for p, t in regions)
+
+
+class DiceMetric_v2(nn.Module):  ### for BraTS dataset
+    def __init__(self):  # weight=None, size_average=True):
         super(DiceMetric_v2, self).__init__()
         self.smooth = 1e-12
 
     def dice(self, probs, labels):
         N = len(probs)
-        m1  = probs.view (N, -1)
-        m2  = labels.view(N, -1)
-        
+        m1 = probs.view(N, -1)
+        m2 = labels.view(N, -1)
+
         intersection = (m1 * m2).sum(dim=1)
         score = (2.0 * intersection) / (m1.sum(dim=1) + m2.sum(dim=1) + self.smooth)
         return score.mean()
 
+    @torch.no_grad()
     def forward(self, logits, labels):
-        """
-        logits: B x C x D x H x W
-        labels: B x D x H x W
-        """
-        C = logits.shape[1]
-        probs = torch.argmax(logits, dim=1)
-        probs = torch.eye(C).to(probs.device)[probs] # B x D x H x W x C
-        labels = labels.squeeze(1).type(torch.LongTensor).to(logits.device)
-        labels = torch.eye(C).to(probs.device)[labels] # B x D x H x W x C
-        dice = self.dice(probs, labels)
-  
-        return dice
+        pred = logits.argmax(1)
+        if labels.ndim == logits.ndim and labels.shape[1] == 1:
+            labels = labels[:, 0]
+        labels = labels.to(logits.device).long()
+        if labels.shape != pred.shape:
+            raise ValueError('Label shape mismatch')
+        # Original metric includes background (micro Dice equals pixel accuracy).
+        return (pred == labels).float().mean()
+
 
 class DiceAccuracy_v1(nn.Module):
-    def __init__(self, prob_mode=False):  #weight=None, size_average=True):
+    def __init__(self, prob_mode=False):  # weight=None, size_average=True):
         super(DiceAccuracy_v1, self).__init__()
         self.prob_mode = prob_mode
 
@@ -76,14 +82,15 @@ class DiceAccuracy_v1(nn.Module):
             probs = torch.sigmoid(logits)
         probs = (probs > 0.5).float()
         smooth = 1e-12
-             
-        m1  = probs.view (N, -1)
-        m2  = labels.view(N, -1)
-        
+
+        m1 = probs.view(N, -1)
+        m2 = labels.view(N, -1)
+
         intersection = (m1 * m2).sum(dim=1)
         score = (2.0 * intersection) / (m1.sum(dim=1) + m2.sum(dim=1) + smooth)
-        
-        return score.sum()/N
+
+        return score.sum() / N
+
 
 def numeric_score(logits, labels):
     """Computes scores:
@@ -95,10 +102,10 @@ def numeric_score(logits, labels):
     probs = torch.sigmoid(logits)
     probs = (probs > 0.5).float()
 
-    FP = ((probs == 0) & (labels == 1)).sum(dim=1)
-    FN = ((probs == 1) & (labels == 0)).sum(dim=1)
+    FP = ((probs == 1) & (labels == 0)).sum(dim=1)
+    FN = ((probs == 0) & (labels == 1)).sum(dim=1)
     TP = ((probs == 1) & (labels == 1)).sum(dim=1)
-    TN = ((probs == 0) & (labels == 0)).sum(dim=1)   
+    TN = ((probs == 0) & (labels == 0)).sum(dim=1)
 
     return FP, FN, TP, TN
 
@@ -114,11 +121,11 @@ class PrecisionandRecall(nn.Module):
 
         FP, FN, TP, TN = numeric_score(logits, labels)
 
-        precision = TP/(TP+FP+1e-12)
-        recall = TP/(TP+FN+1e-12) 
-        return precision.sum()/N, recall.sum()/N
-    
-    
+        precision = TP / (TP + FP + 1e-12)
+        recall = TP / (TP + FN + 1e-12)
+        return precision.sum() / N, recall.sum() / N
+
+
 class Recall(nn.Module):
     def __init__(self):
         super(Recall, self).__init__()
@@ -129,12 +136,13 @@ class Recall(nn.Module):
         labels = labels.view(N, -1)
 
         FP, FN, TP, TN = numeric_score(logits, labels)
-        recall = TP/(TP+FN+1e-12)  
+        recall = TP / (TP + FN + 1e-12)
 
-        return recall.sum()/N
+        return recall.sum() / N
+
 
 class IouAccuracy_v1(nn.Module):
-    def __init__(self):  #weight=None, size_average=True):
+    def __init__(self):  # weight=None, size_average=True):
         super(IouAccuracy_v1, self).__init__()
 
     def forward(self, logits, labels):
@@ -144,55 +152,44 @@ class IouAccuracy_v1(nn.Module):
 
         N = len(logits)
 
-        m1  = probs.view (N, -1)
-        m2  = labels.view(N, -1)
-        
+        m1 = probs.view(N, -1)
+        m2 = labels.view(N, -1)
+
         intersection = (m1 * m2).sum(dim=1)
-        union = m1.sum(dim=1) + m2.sum(dim=1) - (m1*m2).sum(dim=1)
+        union = m1.sum(dim=1) + m2.sum(dim=1) - (m1 * m2).sum(dim=1)
         score = intersection / (union + smooth)
-        
-        return score.sum()/N
 
-def border_map(binary_img,neigh):
-    """
-    Creates the border for a 3D image
-    """
-    binary_map = np.asarray(binary_img, dtype=np.uint8)
-    neigh = neigh
-    west = ndimage.shift(binary_map, [-1, 0,0], order=0)
-    east = ndimage.shift(binary_map, [1, 0,0], order=0)
-    north = ndimage.shift(binary_map, [0, 1,0], order=0)
-    south = ndimage.shift(binary_map, [0, -1,0], order=0)
-    top = ndimage.shift(binary_map, [0, 0, 1], order=0)
-    bottom = ndimage.shift(binary_map, [0, 0, -1], order=0)
-    cumulative = west + east + north + south + top + bottom
-    border = ((cumulative < 6) * binary_map) == 1
-    return border
+        return score.sum() / N
 
-def border_distance(ref,seg):
-    """
-    This functions determines the map of distance from the borders of the
-    segmentation and the reference and the border maps themselves
-    """
-    neigh=8
-    border_ref = border_map(ref,neigh)
-    border_seg = border_map(seg,neigh)
-    oppose_ref = 1 - ref
-    oppose_seg = 1 - seg
-    # euclidean distance transform
-    distance_ref = ndimage.distance_transform_edt(oppose_ref)
-    distance_seg = ndimage.distance_transform_edt(oppose_seg)
-    distance_border_seg = border_ref * distance_seg
-    distance_border_ref = border_seg * distance_ref
-    return distance_border_ref, distance_border_seg#, border_ref, border_seg
 
-def Hausdorff_distance(ref,seg):
-    """
-    This functions calculates the average symmetric distance and the
-    hausdorff distance between a segmentation and a reference image
-    :return: hausdorff distance and average symmetric distance
-    """
-    ref_border_dist, seg_border_dist = border_distance(ref,seg)
-    hausdorff_distance = np.max(
-        [np.max(ref_border_dist), np.max(seg_border_dist)])
-    return hausdorff_distance
+def border_map(binary_img, neigh=None):
+    """Axial-neighbor surface of a 2D or 3D binary mask."""
+    mask = np.asarray(binary_img, dtype=bool)
+    if mask.ndim not in (2, 3):
+        raise ValueError('Expected a 2D or 3D binary mask')
+    structure = ndimage.generate_binary_structure(mask.ndim, 1)
+    return mask & ~ndimage.binary_erosion(mask, structure=structure, border_value=0)
+
+
+def border_distance(ref, seg):
+    border_ref, border_seg = border_map(ref), border_map(seg)
+    if border_ref.shape != border_seg.shape:
+        raise ValueError('Masks must have the same shape')
+    if not border_ref.any() or not border_seg.any():
+        raise ValueError('Use Hausdorff_distance for empty-mask handling')
+    distance_ref = ndimage.distance_transform_edt(~border_ref)
+    distance_seg = ndimage.distance_transform_edt(~border_seg)
+    return border_seg * distance_ref, border_ref * distance_seg
+
+
+def Hausdorff_distance(ref, seg):
+    """Maximum symmetric surface distance in pixels/voxels, not HD95."""
+    ref, seg = np.asarray(ref, dtype=bool), np.asarray(seg, dtype=bool)
+    if ref.shape != seg.shape:
+        raise ValueError('Masks must have the same shape')
+    if not ref.any() and not seg.any():
+        return 0.0
+    if not ref.any() or not seg.any():
+        return float('inf')
+    a, b = border_distance(ref, seg)
+    return float(max(a.max(), b.max()))
