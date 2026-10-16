@@ -193,3 +193,53 @@ def Hausdorff_distance(ref, seg):
         return float('inf')
     a, b = border_distance(ref, seg)
     return float(max(a.max(), b.max()))
+
+
+class ACDCDiceMetrics(DiceMetrics):
+    """Mean per-slice Dice for RV=1, MYO=2, LV=3; both-empty scores 1."""
+    def __init__(self, empty_score=1.0, ignore_lb=255):
+        super().__init__(empty_score=empty_score, ignore_lb=ignore_lb)
+
+    @torch.no_grad()
+    def forward(self, logits, labels):
+        if logits.ndim != 4 or logits.shape[1] != 4:
+            raise ValueError('Expected ACDC logits [B,4,H,W]')
+        if labels.ndim == 4 and labels.shape[1] == 1:
+            labels = labels[:, 0]
+        pred = logits.argmax(1)
+        labels = labels.to(pred.device)
+        if labels.shape != pred.shape:
+            raise ValueError('Expected center labels [B,H,W]')
+        valid = labels != self.ignore_lb
+        return tuple(self.dice((pred == c) & valid, (labels == c) & valid)
+                     for c in (1, 2, 3))
+
+
+class ACDCVolumeDice:
+    """Accumulate intersections/counts per patient-phase, independent of batch size.
+
+    Both-empty structures score 1. Call once per slice, with all volume slices.
+    Validation uses the resized grid; test.py evaluates on the original grid.
+    """
+    def __init__(self):
+        self.counts = {}
+
+    def update(self, pred, target, volume_ids):
+        if isinstance(pred, torch.Tensor):
+            pred = pred.detach().cpu().numpy()
+        if isinstance(target, torch.Tensor):
+            target = target.detach().cpu().numpy()
+        if pred.shape != target.shape or len(pred) != len(volume_ids):
+            raise ValueError('Prediction/target/volume IDs mismatch')
+        for p, t, key in zip(pred, target, volume_ids):
+            counts = self.counts.setdefault(key, np.zeros((3, 2), dtype=np.float64))
+            for i, c in enumerate((1, 2, 3)):
+                pm, tm = p == c, t == c
+                counts[i] += (2 * np.count_nonzero(pm & tm),
+                              np.count_nonzero(pm) + np.count_nonzero(tm))
+
+    def compute(self):
+        if not self.counts:
+            raise ValueError('No volumes evaluated')
+        return np.stack([np.divide(v[:, 0], v[:, 1], out=np.ones(3),
+                                   where=v[:, 1] > 0) for v in self.counts.values()])

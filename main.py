@@ -69,7 +69,7 @@ def select_device(mode, gpu_ids):
     return torch.device(f'cuda:{gpu_ids[0]}'), gpu_ids
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--epochs', type=int, default=400, help='epoch number')
@@ -78,23 +78,37 @@ if __name__ == "__main__":
     parser.add_argument('--val_batch_size', type=int, default=1, help='validation batch size')
     parser.add_argument('--is_thop', type=bool, default=True, help='whether calculate FLOPs/Params')
     parser.add_argument('--path_image', type=str,
-                        default="/datapool/home/ph_teacher1/zhangjh/datasets/multimodal/BraTS2020/MICCAI_BraTS2020_TrainingData",
-                        help='')
+                        required=True,
+                        help="ACDC training root containing patientXXX directories")
     parser.add_argument('--pretrained', type=str, default=None, help='')
     parser.add_argument('--modelname', type=str, default="Wave", help='model name')
-    parser.add_argument('--dataname', type=str, default="BraTS2020", help='dataset name')
+    parser.add_argument('--dataname', type=str, default="ACDC", choices=("ACDC",), help="dataset name")
     parser.add_argument('--train_mode', choices=('single', 'multi', 'cpu'), default='single')
     parser.add_argument('--gpu_ids', type=parse_gpu_ids, default=[0],
                         help='Visible GPU ids, e.g. 0 or 0,1; batch size is total across GPUs')
     parser.add_argument('--folds', type=int, nargs='+', default=list(range(5)))
-    parser.add_argument('--csv_path', default='BraTS2020_Training_5folds.csv')
+    parser.add_argument('--csv_path', default='ACDC_Training_5folds.csv')
     parser.add_argument('--checkpoint_dir', default='./checkpoint')
 
+    parser.add_argument('--image_size', type=int, nargs=2, default=(224, 224), metavar=('H', 'W'))
+    parser.add_argument('--base_channels', type=int, default=16)
+    parser.add_argument('--num_workers', type=int, default=0)
     arg = parser.parse_args()
+    if min(arg.image_size) < 64 or any(n % 32 for n in arg.image_size):
+        parser.error('--image_size must contain multiples of 32, at least 64')
+    if min(arg.train_batch_size, arg.val_batch_size, arg.epochs) < 1 or arg.num_workers < 0:
+        parser.error('Batch sizes and epochs must be positive; num_workers must be non-negative')
+    if arg.base_channels < 8:
+        parser.error('--base_channels must be at least 8')
 
     if any(fold not in range(5) for fold in arg.folds) or len(set(arg.folds)) != len(arg.folds):
         parser.error("--folds must contain distinct values from 0 to 4")
     frame = pd.read_csv(arg.csv_path)
+    if frame['ID'].isna().any() or frame['ID'].duplicated().any():
+        parser.error('CSV must contain unique, nonempty patient IDs')
+    for fold in arg.folds:
+        if not frame[f'Fold_{fold}'].isin((0, 1)).all():
+            parser.error('Fold columns must contain only 0 (validation) or 1 (training)')
     for fold in arg.folds:
         print("Training fold:", fold)
         np.random.seed(100)
@@ -108,38 +122,37 @@ if __name__ == "__main__":
         os.makedirs(save_dir, exist_ok=True)
 
         # 模型初始化
-        if arg.modelname == "WaveCo_Constraint":
-            import models.WaveCo_Constraint_BraTS as net
-            model = net.WaveCo_Constraint(inChannel=2, outChannel=4, baseChannel=16)
+        if arg.modelname == "Wave":
+            import models.Wave_ACDC as net
+            model = net.Wave(inChannel=1, outChannel=4, baseChannel=arg.base_channels)
 
         else:
             raise ValueError(f"Unsupported model: {arg.modelname}")
 
-        # 数据变换
+        # Volume normalization and planar resizing are handled by ACDCDataset.
         train_transforms = transforms.Compose([
-            transforms.NormalizeIntensity(),
-            transforms.RandomCrop(margin=(16, 16, 16), target_size=(128, 128, 128), original_size=(155, 240, 240)),
             transforms.Mirroring(p=0.5),
+            transforms.RandomRotation(degrees=15, p=0.5),
             transforms.ToTensor()])
-        val_transforms = transforms.Compose([
-            transforms.NormalizeIntensity(),
-            transforms.RandomCrop(margin=(0, 0, 0), target_size=(128, 128, 128), original_size=(155, 240, 240)),
-            transforms.ToTensor()])
+        val_transforms = transforms.Compose([transforms.ToTensor()])
 
         # 数据集
         listTrainPatients = list(frame["ID"][frame["Fold_{}".format(fold)] == 1])
         listValPatients = list(frame["ID"][frame["Fold_{}".format(fold)] == 0])
-        train_set = dataset.MedDataset(arg.path_image, listTrainPatients, transforms=train_transforms, mode="train")
-        val_set = dataset.MedDataset(arg.path_image, listValPatients, transforms=val_transforms, mode="val")
+        train_set = dataset.ACDCDataset(arg.path_image, listTrainPatients, transforms=train_transforms, mode="train", output_size=arg.image_size)
+        val_set = dataset.ACDCDataset(arg.path_image, listValPatients, transforms=val_transforms, mode="val", output_size=arg.image_size)
+
+        if not listTrainPatients or not listValPatients or set(listTrainPatients) & set(listValPatients):
+            raise ValueError("Expected non-empty, disjoint patient splits")
 
         # 数据加载器
-        train_loader = DataLoader(train_set, batch_size=arg.train_batch_size, shuffle=True, num_workers=8, pin_memory=(device.type == "cuda"))
-        val_loader = DataLoader(val_set, batch_size=arg.val_batch_size, shuffle=False, num_workers=4, pin_memory=(device.type == "cuda"))
+        train_loader = DataLoader(train_set, batch_size=arg.train_batch_size, shuffle=True, num_workers=arg.num_workers, pin_memory=(device.type == "cuda"))
+        val_loader = DataLoader(val_set, batch_size=arg.val_batch_size, shuffle=False, num_workers=arg.num_workers, pin_memory=(device.type == "cuda"))
         dataloaders = {'train': train_loader, 'val': val_loader}
 
         # Load on the unwrapped model: both single/multi checkpoints are supported.
         if arg.pretrained is not None:
-            pretrain = torch.load(arg.pretrained, map_location='cpu')
+            pretrain = torch.load(arg.pretrained, map_location='cpu', weights_only=True)
             if isinstance(pretrain, dict) and 'state_dict' in pretrain:
                 pretrain = pretrain['state_dict']
             pretrain = {k.removeprefix('module.'): v for k, v in pretrain.items()}
@@ -157,14 +170,14 @@ if __name__ == "__main__":
 
         # 损失函数
         criterion = losses.CE_GeneralizedSoftDiceLoss().to(device)
-        dice_metric = metrics.DiceMetrics()
+        dice_metric = metrics.ACDCDiceMetrics()
 
         min_loss = np.inf
         log_data = []
 
         for epoch in range(arg.epochs):
             loss_train = 0.0
-            dice_train = [0]*4
+            dice_train = [0]*3
 
             model.train()
             for sample in tqdm(dataloaders['train']):
@@ -177,23 +190,24 @@ if __name__ == "__main__":
                 loss.backward()
                 optimizer.step()
 
-                loss_train += loss.item()
+                loss_train += loss.item() * input.shape[0]
 
                 # Dice
                 dice = dice_metric(output.detach(), target)
-                for i in range(4):
-                    dice_train[i] += dice[i].item()
+                for i in range(3):
+                    dice_train[i] += dice[i].item() * input.shape[0]
 
-            n_train = len(dataloaders['train'])
+            n_train = len(train_set)
             if n_train == 0:
                 raise ValueError("Training loader is empty")
             loss_train /= n_train
-            for i in range(4):
+            for i in range(3):
                 dice_train[i] /= n_train
 
             loss_val = 0.0
-            dice_val = [0]*4
+            dice_val = [0]*3
 
+            volume_dice = metrics.ACDCVolumeDice()
             model.eval()
             with torch.no_grad():
                 for sample in tqdm(dataloaders['val']):
@@ -202,18 +216,15 @@ if __name__ == "__main__":
 
                     loss = criterion(output, target)
 
-                    loss_val += loss.item()
+                    loss_val += loss.item() * input.shape[0]
 
-                    dice = dice_metric(output.detach(), target)
-                    for i in range(4):
-                        dice_val[i] += dice[i].item()
+                    volume_dice.update(output.argmax(1), target, sample['volume_id'])
 
-            n_val = len(dataloaders['val'])
+            n_val = len(val_set)
             if n_val == 0:
                 raise ValueError("Validation loader is empty")
             loss_val /= n_val
-            for i in range(4):
-                dice_val[i] /= n_val
+            dice_val = volume_dice.compute().mean(axis=0).tolist()
 
             # 保存最优模型
             if min_loss > loss_val:
@@ -223,11 +234,15 @@ if __name__ == "__main__":
                 print("Saving model: ", filename)
 
             print(f"[Epoch {epoch + 1}/{arg.epochs}] Train loss: {loss_train:.4f} | Val loss: {loss_val:.4f}")
-            print("Train Dice:", dict(zip(('TC', 'ED', 'ET', 'WT'), dice_train)))
-            print("Val Dice:", dict(zip(('TC', 'ED', 'ET', 'WT'), dice_val)))
+            print("Train slice Dice:", dict(zip(('RV', 'MYO', 'LV'), dice_train)))
+            print("Val volume Dice (resized grid):", dict(zip(('RV', 'MYO', 'LV'), dice_val)))
             log_data.append([epoch + 1, loss_train, *dice_train, loss_val, *dice_val])
-            columns = ['Epoch', 'Loss_train', 'Dice_TC_train', 'Dice_ED_train',
-                       'Dice_ET_train', 'Dice_WT_train', 'Loss_val', 'Dice_TC_val',
-                       'Dice_ED_val', 'Dice_ET_val', 'Dice_WT_val']
+            columns = ['Epoch', 'Loss_train', 'Dice_RV_train', 'Dice_MYO_train',
+                       'Dice_LV_train', 'Loss_val', 'Dice_RV_val',
+                       'Dice_MYO_val', 'Dice_LV_val']
             pd.DataFrame(log_data, columns=columns).to_csv(
                 os.path.join(save_dir, f'log_fold_{fold}.csv'), index=False)
+
+
+if __name__ == "__main__":
+    main()

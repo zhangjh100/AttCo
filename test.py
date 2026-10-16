@@ -1,130 +1,101 @@
-import os
+"""Evaluate Wave_ACDC on held-out patients and save original-geometry volumes."""
 import argparse
+from pathlib import Path
 import numpy as np
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-import nibabel as nib
-from tqdm import tqdm
 import pandas as pd
-
-# 100%复用仓库现有模块，无需修改任何已有代码
+import SimpleITK as sitk
+import torch
+from torch.utils.data import DataLoader
+from torch.nn import functional as F
+from tqdm import tqdm
 import dataset
 import transforms
 import metrics
-from models.AttCo_BraTS import AttCo  # 导入BraTS模型（AutoPET请替换为AttCo_AutoPET）
-from models.WaveCo_Constraint_BraTS import WaveCo_Constraint
+from models.Wave_ACDC import Wave
 
 
-def save_nii(data, path, affine=np.eye(4)):
-    img = nib.Nifti1Image(data, affine)
-    nib.save(img, path)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="WaveCo 模型测试脚本")
-    parser.add_argument('--modelname', type=str, default="WaveCo", help='模型名称')
-    parser.add_argument('--dataname', type=str, default="BraTS2020", help='数据集名称')
-    parser.add_argument('--fold', type=int, default=0, help='交叉验证折数(0-4)')
-    parser.add_argument('--test_batch_size', type=int, default=1, help='3D数据固定为1')
-    parser.add_argument('--path_image', type=str, required=True, help='测试数据集根目录')
-    parser.add_argument('--csv_path', type=str, default="BraTS2020_Training_5folds.csv", help='5折划分CSV路径')
-    parser.add_argument('--pretrained', type=str, required=True, help='训练好的模型权重(.pt)路径')
-    parser.add_argument('--save_pred', action='store_true', default=False, help='是否保存预测结果')
-    parser.add_argument('--output_path', type=str, default="./test_predictions", help='预测结果保存目录')
-    parser.add_argument('--gpu_id', type=int, default=0, help='使用的GPU卡号')
-
+def main():
+    parser = argparse.ArgumentParser(description='ACDC 2.5D center-slice evaluation')
+    parser.add_argument('--path_image', required=True)
+    parser.add_argument('--pretrained', required=True)
+    parser.add_argument('--csv_path', default='ACDC_Training_5folds.csv')
+    parser.add_argument('--fold', type=int, choices=range(5), default=0)
+    parser.add_argument('--test_batch_size', type=int, default=1)
+    parser.add_argument('--image_size', type=int, nargs=2, default=(224, 224))
+    parser.add_argument('--base_channels', type=int, default=16)
+    parser.add_argument('--num_workers', type=int, default=0)
+    parser.add_argument('--gpu_id', type=int, default=0)
+    parser.add_argument('--cpu', action='store_true')
+    parser.add_argument('--save_pred', action='store_true')
+    parser.add_argument('--output_path', default='./test_predictions')
     args = parser.parse_args()
-
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"使用设备: {device}")
-
-    test_transforms = transforms.Compose([
-        transforms.NormalizeIntensity(),
-        transforms.RandomCrop(margin=(0, 0, 0), target_size=(128, 128, 128), original_size=(155, 240, 240)),
-        transforms.ToTensor()
-    ])
-
+    if min(args.image_size) < 64 or any(n % 32 for n in args.image_size):
+        parser.error('--image_size must contain multiples of 32, at least 64')
+    if args.test_batch_size < 1 or args.num_workers < 0 or args.base_channels < 8:
+        parser.error('Invalid batch size, worker count or base channels')
+    device = torch.device('cpu' if args.cpu or not torch.cuda.is_available()
+                          else f'cuda:{args.gpu_id}')
     frame = pd.read_csv(args.csv_path)
-    listTestPatients = list(frame["ID"][frame[f"Fold_{args.fold}"] == 0])
+    patients = frame.loc[frame[f'Fold_{args.fold}'] == 0, 'ID'].tolist()
+    if not patients:
+        raise ValueError('No held-out patients')
+    data = dataset.ACDCDataset(args.path_image, patients, mode='val',
+                              transforms=transforms.ToTensor(), output_size=args.image_size)
+    loader = DataLoader(data, batch_size=args.test_batch_size, shuffle=False,
+                        num_workers=args.num_workers, pin_memory=device.type == 'cuda')
+    model = Wave(inChannel=1, outChannel=4, baseChannel=args.base_channels)
+    state = torch.load(args.pretrained, map_location='cpu', weights_only=True)
+    if 'state_dict' in state:
+        state = state['state_dict']
+    model.load_state_dict({k.removeprefix('module.'): v for k, v in state.items()}, strict=True)
+    model.to(device).eval()
+    output_path = Path(args.output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+    scores = metrics.ACDCVolumeDice()
+    rows = []
+    current_id, slices, seen = None, None, set()
 
-    test_set = dataset.MedDataset(args.path_image, listTestPatients, transforms=test_transforms, mode="val")
-    test_loader = DataLoader(test_set, batch_size=args.test_batch_size, shuffle=False, num_workers=4, pin_memory=True)
-
-    model = WaveCo_Constraint(inChannel=2, outChannel=4, baseChannel=16)  # 训练时用24就改成24！
-    model = model.to(device)
-
-    print(f"加载模型权重: {args.pretrained}")
-    checkpoint = torch.load(args.pretrained, map_location=device)
-
-    if isinstance(checkpoint, torch.nn.Module):
-        model.load_state_dict(checkpoint.state_dict())
-    else:
-        if isinstance(checkpoint, dict) and 'module.' in list(checkpoint.keys())[0]:
-            from collections import OrderedDict
-
-            new_state_dict = OrderedDict()
-            for k, v in checkpoint.items():
-                new_state_dict[k.replace('module.', '')] = v
-            model.load_state_dict(new_state_dict)
-        else:
-            model.load_state_dict(checkpoint)
-
-    model.eval()
-
-    # if isinstance(checkpoint, dict) and 'module.' in list(checkpoint.keys())[0]:
-    #     from collections import OrderedDict
-    #
-    #     new_state_dict = OrderedDict()
-    #     for k, v in checkpoint.items():
-    #         new_state_dict[k.replace('module.', '')] = v
-    #     model.load_state_dict(new_state_dict)
-    # else:
-    #     model.load_state_dict(checkpoint)
-
-    dice_metric = metrics.DiceMetrics()
-    total_dice = [0.0] * 4
-    num_samples = len(test_loader)
-
-    if args.save_pred:
-        os.makedirs(args.output_path, exist_ok=True)
-        print(f"预测结果将保存到: {args.output_path}")
+    def finish(volume_id, prediction, seen_slices):
+        record = data.volumes[volume_id]
+        if len(seen_slices) != int(record['volume_shape'][0]):
+            raise ValueError(f'Incomplete volume: {volume_id}')
+        reference = sitk.ReadImage(record['image_path'])
+        target = sitk.GetArrayFromImage(sitk.ReadImage(record['mask_path']))
+        scores.update(prediction[None], target[None], [volume_id])
+        dice = scores.compute()[-1]
+        rows.append(dict(volume_id=volume_id, patient_id=record['patient_id'],
+                         phase=record['phase'], Dice_RV=dice[0], Dice_MYO=dice[1],
+                         Dice_LV=dice[2], Dice_mean=float(dice.mean())))
+        if args.save_pred:
+            result = sitk.GetImageFromArray(prediction)
+            result.CopyInformation(reference)
+            sitk.WriteImage(result, str(output_path / f'{volume_id}_pred.nii.gz'))
 
     with torch.no_grad():
-        for idx, sample in enumerate(tqdm(test_loader, desc="测试进度")):
-            input_img = sample["input"].to(device)
-            target = sample["target"].type(torch.LongTensor).to(device)
-            patient_id = sample["id"][0]
+        for sample in tqdm(loader, desc='ACDC evaluation'):
+            logits = model(sample['input'].to(device))
+            for i, volume_id in enumerate(sample['volume_id']):
+                if volume_id != current_id:
+                    if current_id is not None:
+                        finish(current_id, slices, seen)
+                    current_id = volume_id
+                    slices = np.zeros(tuple(data.volumes[volume_id]['volume_shape']), dtype=np.uint8)
+                    seen = set()
+                z = int(sample['slice_index'][i])
+                if z in seen:
+                    raise ValueError(f'Duplicate slice: {volume_id}/{z}')
+                # Restore continuous class scores before argmax, preserving native H/W.
+                restored = F.interpolate(logits[i:i+1], size=slices.shape[1:],
+                                         mode='bilinear', align_corners=False)
+                slices[z] = restored.argmax(1)[0].cpu().numpy().astype(np.uint8)
+                seen.add(z)
+    if current_id is not None:
+        finish(current_id, slices, seen)
+    pd.DataFrame(rows).to_csv(output_path / f'test_results_fold_{args.fold}.csv', index=False)
+    mean_dice = scores.compute().mean(axis=0)
+    print('Original-grid patient-phase volume Dice:', dict(zip(('RV', 'MYO', 'LV'), mean_dice)))
+    print('Mean Dice:', float(mean_dice.mean()))
 
-            output = model(input_img)
-            pred = torch.argmax(output, dim=1).squeeze(0).cpu().numpy()
-            target_np = target.squeeze(0).cpu().numpy()
 
-            # 计算Dice指标
-            dice = dice_metric(output, target)
-            for i in range(4):
-                total_dice[i] += dice[i].item()
-
-            if args.save_pred:
-                save_nii(pred, os.path.join(args.output_path, f"{patient_id}_pred.nii.gz"))
-
-    avg_dice = [d / num_samples for d in total_dice]
-    print("\n" + "=" * 60)
-    print(f"【Fold {args.fold} 测试结果】")
-    print(f"肿瘤核心(TC) 平均Dice: {avg_dice[0]:.4f}")
-    print(f"水肿(ED) 平均Dice: {avg_dice[1]:.4f}")
-    print(f"增强肿瘤(ET) 平均Dice: {avg_dice[2]:.4f}")
-    print(f"全肿瘤(WT) 平均Dice: {avg_dice[3]:.4f}")
-    print("=" * 60)
-
-    # -------------------------- 10. 保存指标到CSV（方便后续统计） --------------------------
-    result_df = pd.DataFrame({
-        "Fold": [args.fold],
-        "Dice_TC": [avg_dice[0]],
-        "Dice_ED": [avg_dice[1]],
-        "Dice_ET": [avg_dice[2]],
-        "Dice_WT": [avg_dice[3]]
-    })
-    result_df.to_csv(f"test_results_fold_{args.fold}.csv", index=False)
-    print(f"指标结果已保存到: test_results_fold_{args.fold}.csv")
+if __name__ == '__main__':
+    main()
