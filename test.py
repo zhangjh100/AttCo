@@ -1,4 +1,4 @@
-"""Evaluate Wave_ACDC on held-out patients and save original-geometry volumes."""
+"""Evaluate registered ACDC models on held-out patients and save original-geometry volumes."""
 import argparse
 from pathlib import Path
 import numpy as np
@@ -11,13 +11,15 @@ from tqdm import tqdm
 import dataset
 import transforms
 import metrics
-from models.Wave_ACDC import Wave
+from main import MODEL_REGISTRY, build_model, validate_model_config
 
 
 def main():
     parser = argparse.ArgumentParser(description='ACDC 2.5D center-slice evaluation')
     parser.add_argument('--path_image', required=True)
     parser.add_argument('--pretrained', required=True)
+    parser.add_argument('--modelname', choices=tuple(MODEL_REGISTRY), default='Wave',
+                        help='Must match the architecture used for training: Wave or WaveDe')
     parser.add_argument('--csv_path', default='ACDC_Training_5folds.csv')
     parser.add_argument('--fold', type=int, choices=range(5), default=0)
     parser.add_argument('--test_batch_size', type=int, default=1)
@@ -29,6 +31,10 @@ def main():
     parser.add_argument('--save_pred', action='store_true')
     parser.add_argument('--output_path', default='./test_predictions')
     args = parser.parse_args()
+    try:
+        validate_model_config(args.modelname, args.base_channels)
+    except ValueError as exc:
+        parser.error(str(exc))
     if min(args.image_size) < 64 or any(n % 32 for n in args.image_size):
         parser.error('--image_size must contain multiples of 32, at least 64')
     if args.test_batch_size < 1 or args.num_workers < 0 or args.base_channels < 8:
@@ -43,7 +49,7 @@ def main():
                               transforms=transforms.ToTensor(), output_size=args.image_size)
     loader = DataLoader(data, batch_size=args.test_batch_size, shuffle=False,
                         num_workers=args.num_workers, pin_memory=device.type == 'cuda')
-    model = Wave(inChannel=1, outChannel=4, baseChannel=args.base_channels)
+    model = build_model(args.modelname, args.base_channels)
     state = torch.load(args.pretrained, map_location='cpu', weights_only=True)
     if 'state_dict' in state:
         state = state['state_dict']

@@ -122,9 +122,9 @@ def main():
         os.makedirs(save_dir, exist_ok=True)
 
         # 模型初始化
-        if arg.modelname == "Wave":
-            import models.Wave_ACDC as net
-            model = net.Wave(inChannel=1, outChannel=4, baseChannel=arg.base_channels)
+        if arg.modelname == "WaveDe":
+            import models.WaveDe_ACDC as net
+            model = net.WaveDe(inChannel=1, outChannel=4, baseChannel=arg.base_channels)
 
         else:
             raise ValueError(f"Unsupported model: {arg.modelname}")

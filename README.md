@@ -51,3 +51,27 @@ structures score 1. Output NIfTI files preserve original spacing, origin and
 direction, with separate files per ED/ES frame. CSV splits are patient-level;
 ED and ES of one patient always stay together. These evaluation patients are
 held-out folds of the labeled training data, not the unlabeled challenge test set.
+
+
+### Model selection
+
+`MODEL_REGISTRY` in main.py is shared by training and test.py. Use
+`--modelname Wave` (default, Wave_ACDC.py) or `--modelname WaveDe`
+(WaveDe_ACDC.py). Both accept the existing ACDC 2.5D loader and center-slice loss.
+WaveDe requires base_channels >=8 and divisible by 4 (default 16). WaveDe keeps
+its constructor initialization to preserve deformable-attention offset initialization.
+
+```sh
+python main.py --path_image /path/to/ACDC/training --modelname WaveDe --train_mode multi --gpu_ids 0,1
+python test.py --path_image /path/to/ACDC/training --modelname WaveDe --fold 0 --pretrained checkpoint/ACDC/WaveDe/best_fold_0.pt --save_pred --output_path test_predictions/WaveDe/fold_0
+```
+
+The selected architecture and base_channels must match the checkpoint. Existing
+Wave checkpoints remain supported. All folds run by default during training.
+Weights/logs are separated under checkpoint/ACDC/<modelname>/.
+Legacy models WaveCo, WaveCo_Constraint, AttCo_BraTS and AttCo_AutoPET are also
+registered with their actual class names, dataset and 3D layout. The current
+ACDC entry points reject those models before loading data: their original 3D
+pipelines must be adapted separately before they can train on ACDC slices.
+To add another compatible model, add its module/class/dataset/layout tuple to
+MODEL_REGISTRY and keep its constructor compatible with inChannel/outChannel/baseChannel.
