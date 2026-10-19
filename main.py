@@ -155,7 +155,7 @@ def main():
             pretrain = torch.load(arg.pretrained, map_location='cpu', weights_only=True)
             if isinstance(pretrain, dict) and 'state_dict' in pretrain:
                 pretrain = pretrain['state_dict']
-            pretrain = {k.removeprefix('module.'): v for k, v in pretrain.items()}
+            pretrain = {(k[7:] if k.startswith('module.') else k): v for k, v in pretrain.items()}
             model.load_state_dict(pretrain, strict=True)
             print("Loaded pretrained model")
         else:

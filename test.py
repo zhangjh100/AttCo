@@ -47,7 +47,7 @@ def main():
     state = torch.load(args.pretrained, map_location='cpu', weights_only=True)
     if 'state_dict' in state:
         state = state['state_dict']
-    model.load_state_dict({k.removeprefix('module.'): v for k, v in state.items()}, strict=True)
+    model.load_state_dict({(k[7:] if k.startswith('module.') else k): v for k, v in state.items()}, strict=True)
     model.to(device).eval()
     output_path = Path(args.output_path)
     output_path.mkdir(parents=True, exist_ok=True)
