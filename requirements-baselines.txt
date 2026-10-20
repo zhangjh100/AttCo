@@ -1,0 +1,6 @@
+-r requirements.txt
+timm==0.9.16
+einops>=0.7
+ml-collections>=0.1.1
+fvcore>=0.1.5
+# Mamba-UNet additionally needs a CUDA-compatible mamba-ssm build. See BASELINES.md.
