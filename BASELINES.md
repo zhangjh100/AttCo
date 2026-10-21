@@ -21,6 +21,21 @@ Wave、WaveDe 继续使用 `[B,3,H,W]`，三个通道依次为前一张、中心
 
 ## 安装与运行
 
+### 服务器简化命令
+
+安装好依赖及 CUDA 版 PyTorch 后，在项目根目录运行：
+
+```bash
+python main.py --train_batch_size 32 --path_image /datapool/home/ph_teacher1/zhangjh/datasets/ACDC --modelname EMCAD
+python main.py --train_batch_size 8 --path_image /datapool/home/ph_teacher1/zhangjh/datasets/ACDC --modelname EffiDec3D
+```
+
+`--path_image` 支持直接包含 patientXXX 的目录、含 training/ 的 ACDC 根目录，以及含 database/training/ 的解压根目录；不会自动使用 testing/。默认单卡 GPU 0、400 epochs、依次运行五折。程序按模型名自动选择单切片 2D（224×224）或真 3D（32×128×128）输入。batch size 对 2D 表示切片数，对 3D 表示 ED/ES 体积数；8 个三维体积所需显存取决于服务器，显存不足时应减小 batch size。
+
+二维模型可替换为 `Mamba-UNet`、`EMCAD`、`CASCADE`、`MT-UNet`、`TransUNet`、`U-Net`；三维模型可替换为 `EffiDec3D`、`EfficientMedNeXt`。每条命令只训练一个模型。Mamba-UNet 还须安装兼容的 mamba-ssm CUDA 算子。首次确认数据与环境可用时可追加 `--folds 0 --epochs 1`。
+
+EMCAD、EffiDec3D 及其他官方基线保留构造器初始化；仅 Wave/WaveDe 额外应用项目 Xavier 初始化。保存的 config 文件记录实际初始化方式。
+
 在项目根目录执行：
 
 ```powershell

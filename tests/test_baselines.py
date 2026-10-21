@@ -10,9 +10,23 @@ import pandas as pd
 import SimpleITK as sitk
 import torch
 from comparison_data import build_dataset
+from dataset import resolve_acdc_root
 from transforms import ToTensor
 
 class BaselinePipelineTest(unittest.TestCase):
+    def test_acdc_root_layouts(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(FileNotFoundError):
+                resolve_acdc_root(root)
+            training = Path(root) / 'training'
+            training.mkdir()
+            self.make_data(training)
+            self.assertEqual(resolve_acdc_root(root), str(training.resolve()))
+            self.assertEqual(resolve_acdc_root(training), str(training.resolve()))
+            data = build_dataset('U-Net', root, ['patient001'], mode='val',
+                                 output_size=(64,64), transforms=ToTensor())
+            self.assertEqual(data[0]['input'].shape, (1,64,64))
+
     def make_data(self,root):
         for patient in ('patient001','patient002'):
             folder=Path(root)/patient; folder.mkdir()
@@ -42,7 +56,7 @@ class BaselinePipelineTest(unittest.TestCase):
             csv=Path(root)/'folds.csv'
             pd.DataFrame({'ID':['patient001','patient002'],'Fold_0':[1,0]}).to_csv(csv,index=False)
             env=dict(os.environ,OMP_NUM_THREADS='2',MKL_NUM_THREADS='2')
-            for name in ('U-Net','EfficientMedNeXt'):
+            for name in ('U-Net','EfficientMedNeXt','EMCAD','EffiDec3D'):
                 with self.subTest(model=name):
                     common=['--path_image',root,'--csv_path',str(csv),'--modelname',name,
                             '--image_size','64','64','--volume_size','32','32','32']

@@ -52,7 +52,7 @@ def main():
     parser.add_argument('--pretrained', required=True)
     parser.add_argument('--modelname', choices=tuple(MODEL_REGISTRY), default='Wave',
                         help='Must match the architecture used for training')
-    parser.add_argument('--csv_path', default='ACDC_Training_5folds.csv')
+    parser.add_argument('--csv_path', default=str(Path(__file__).resolve().parent / 'ACDC_Training_5folds.csv'))
     parser.add_argument('--fold', type=int, choices=range(5), default=0)
     parser.add_argument('--test_batch_size', type=int, default=1)
     parser.add_argument('--image_size', type=int, nargs=2, default=(224, 224))

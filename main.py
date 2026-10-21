@@ -84,7 +84,7 @@ def main():
     parser.add_argument('--is_thop', type=bool, default=True, help='whether calculate FLOPs/Params')
     parser.add_argument('--path_image', type=str,
                         required=True,
-                        help="ACDC training root containing patientXXX directories")
+                        help="ACDC root or training directory containing patientXXX directories")
     parser.add_argument('--pretrained', type=str, default=None, help='')
     parser.add_argument('--modelname', type=str, default="Wave", choices=tuple(MODEL_REGISTRY), help='model name')
     parser.add_argument('--dataname', type=str, default="ACDC", choices=("ACDC",), help="dataset name")
@@ -92,7 +92,7 @@ def main():
     parser.add_argument('--gpu_ids', type=parse_gpu_ids, default=[0],
                         help='Visible GPU ids, e.g. 0 or 0,1; batch size is total across GPUs')
     parser.add_argument('--folds', type=int, nargs='+', default=list(range(5)))
-    parser.add_argument('--csv_path', default='ACDC_Training_5folds.csv')
+    parser.add_argument('--csv_path', default=str(Path(__file__).resolve().parent / 'ACDC_Training_5folds.csv'))
     parser.add_argument('--checkpoint_dir', default='./checkpoint')
 
     parser.add_argument('--image_size', type=int, nargs=2, default=(224, 224), metavar=('H', 'W'))
@@ -113,6 +113,13 @@ def main():
 
     if any(fold not in range(5) for fold in arg.folds) or len(set(arg.folds)) != len(arg.folds):
         parser.error("--folds must contain distinct values from 0 to 4")
+    try:
+        arg.path_image = dataset.resolve_acdc_root(arg.path_image)
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
+    spatial = tuple(arg.volume_size) if MODEL_REGISTRY[arg.modelname] == '3d' else tuple(arg.image_size)
+    print(f'Model: {arg.modelname}; input: {MODEL_REGISTRY[arg.modelname]} {spatial}; '
+          f'train batch: {arg.train_batch_size}; folds: {arg.folds}; data: {arg.path_image}')
     frame = pd.read_csv(arg.csv_path)
     if frame['ID'].isna().any() or frame['ID'].duplicated().any():
         parser.error('CSV must contain unique, nonempty patient IDs')
@@ -134,8 +141,10 @@ def main():
         model = build_model(arg.modelname, arg.base_channels, arg.image_size, arg.volume_size)
         config = dict(vars(arg))
         config['input_dim'] = MODEL_REGISTRY[arg.modelname]
-        config['initialization'] = 'checkpoint' if arg.pretrained else 'scratch (native constructor)'
-        config['upstream'] = {p.parent.name: json.loads(p.read_text()) for p in Path('third_party').glob('*/UPSTREAM.json')}
+        config['initialization'] = ('checkpoint' if arg.pretrained else
+                                    'scratch (xavier_uniform_)' if arg.modelname in ('Wave', 'WaveDe')
+                                    else 'scratch (native constructor)')
+        config['upstream'] = {p.parent.name: json.loads(p.read_text()) for p in (Path(__file__).resolve().parent / 'third_party').glob('*/UPSTREAM.json')}
         with open(os.path.join(save_dir, f'config_fold_{fold}.json'), 'w') as handle:
             json.dump(config, handle, indent=2)
 
@@ -170,8 +179,8 @@ def main():
             print("Loaded pretrained model")
         else:
             print("Training from Scratch")
-            if arg.modelname in ('Wave','WaveDe','EMCAD','EffiDec3D'):
-                init_weights(model)  # Preserve native initialization of official baselines.
+            if arg.modelname in ('Wave','WaveDe'):
+                init_weights(model)
         model = model.to(device)
         if arg.train_mode == 'multi':
             model = nn.DataParallel(model, device_ids=gpu_ids, output_device=gpu_ids[0])

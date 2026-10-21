@@ -1,0 +1,86 @@
+[
+  {
+    "model": "Mamba-UNet",
+    "status": "blocked_missing_cuda_operator",
+    "detail": "Mamba-UNet needs the official mamba-ssm CUDA selective_scan operator; use a compatible Linux/CUDA environment. No substitute architecture is used."
+  },
+  {
+    "model": "EMCAD",
+    "status": "passed",
+    "shape": [
+      1,
+      4,
+      64,
+      64
+    ],
+    "seconds": 6.26
+  },
+  {
+    "model": "CASCADE",
+    "status": "passed",
+    "shape": [
+      1,
+      4,
+      64,
+      64
+    ],
+    "seconds": 1.36
+  },
+  {
+    "model": "EffiDec3D",
+    "status": "passed",
+    "shape": [
+      1,
+      4,
+      32,
+      32,
+      32
+    ],
+    "seconds": 1.33
+  },
+  {
+    "model": "EfficientMedNeXt",
+    "status": "passed",
+    "shape": [
+      1,
+      4,
+      32,
+      32,
+      32
+    ],
+    "seconds": 1.71
+  },
+  {
+    "model": "MT-UNet",
+    "status": "passed",
+    "shape": [
+      1,
+      4,
+      224,
+      224
+    ],
+    "seconds": 2.82
+  },
+  {
+    "model": "TransUNet",
+    "status": "passed",
+    "shape": [
+      1,
+      4,
+      224,
+      224
+    ],
+    "seconds": 2.53
+  },
+  {
+    "model": "U-Net",
+    "status": "passed",
+    "shape": [
+      1,
+      4,
+      64,
+      64
+    ],
+    "seconds": 0.38
+  }
+]

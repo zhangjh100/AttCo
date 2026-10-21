@@ -251,6 +251,18 @@ class AutoPETDataset(Dataset):  ## AutoPET Challenge
         return sitk.GetArrayFromImage(sitk.ReadImage(str(path_to_nifti)))
 
 
+def resolve_acdc_root(path_root):
+    """Accept either the ACDC root or its training directory, never testing/."""
+    root = plb.Path(path_root).expanduser().resolve()
+    for candidate in (root, root / 'training', root / 'database' / 'training'):
+        if candidate.is_dir() and any(candidate.glob('patient*/Info.cfg')):
+            return str(candidate)
+    raise FileNotFoundError(
+        f'No ACDC patient directories with Info.cfg found in {root}, '
+        f'{root / "training"}, or {root / "database" / "training"}. '
+        'Provide the extracted ACDC root or training directory.')
+
+
 class ACDCDataset(MedDataset):
     """Official ACDC layout: root/patientXXX/{Info.cfg,patientXXX_frameYY*.nii.gz}.
 
@@ -272,6 +284,7 @@ class ACDCDataset(MedDataset):
             raise ValueError('phases must contain ED and/or ES')
         if cache_size < 0:
             raise ValueError('cache_size must be non-negative')
+        path_root = resolve_acdc_root(path_root)
         self.path_root = str(path_root)
         self.patients_ID = [str(p) for p in listPatients]
         if len(set(self.patients_ID)) != len(self.patients_ID):
