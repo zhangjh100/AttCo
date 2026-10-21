@@ -229,7 +229,7 @@ class WinAttention(nn.Module):
         x = x.permute(0, 2, 1).contiguous().view(b, c, h, w)
         if h % self.window_size != 0:
             right_size = h + self.window_size - h % self.window_size
-            new_x = torch.zeros((b, c, right_size, right_size))
+            new_x = x.new_zeros((b, c, right_size, right_size))
             new_x[:, :, 0:x.shape[2], 0:x.shape[3]] = x[:]
             new_x[:, :, x.shape[2]:,
                   x.shape[3]:] = x[:, :, (x.shape[2] - right_size):,
@@ -242,7 +242,7 @@ class WinAttention(nn.Module):
                       1).contiguous().view(b, h // self.window_size,
                                            w // self.window_size,
                                            self.window_size * self.window_size,
-                                           c).cuda()
+                                           c).to(x.device)
         x = self.attention(x)  # (b, p, p, win, h)
         return x
 
@@ -281,12 +281,12 @@ class GaussianTrans(nn.Module):
                 atten_y = atten_y_full[:, c, r, :]  # (b, h)
 
                 dis_x = torch.tensor([(h - c)**2 for h in range(x.shape[2])
-                                      ]).cuda()  # (b, w)
+                                      ]).to(x.device)  # (b, w)
                 dis_y = torch.tensor([(w - r)**2 for w in range(x.shape[1])
-                                      ]).cuda()  # (b, h)
+                                      ]).to(x.device)  # (b, h)
 
-                dis_x = -(self.shift * dis_x + self.bias).cuda()
-                dis_y = -(self.shift * dis_y + self.bias).cuda()
+                dis_x = -(self.shift * dis_x + self.bias).to(x.device)
+                dis_y = -(self.shift * dis_y + self.bias).to(x.device)
 
                 atten_x = self.softmax(dis_x + atten_x)
                 atten_y = self.softmax(dis_y + atten_y)

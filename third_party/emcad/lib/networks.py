@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from lib.pvtv2 import pvt_v2_b0, pvt_v2_b1, pvt_v2_b2, pvt_v2_b3, pvt_v2_b4, pvt_v2_b5
-from lib.resnet import resnet18, resnet34, resnet50, resnet101, resnet152
-from lib.decoders import EMCAD
+from third_party.emcad.lib.pvtv2 import pvt_v2_b0, pvt_v2_b1, pvt_v2_b2, pvt_v2_b3, pvt_v2_b4, pvt_v2_b5
+from third_party.emcad.lib.resnet import resnet18, resnet34, resnet50, resnet101, resnet152
+from third_party.emcad.lib.decoders import EMCAD
 
 
 class EMCADNet(nn.Module):

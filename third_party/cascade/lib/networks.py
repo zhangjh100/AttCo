@@ -7,9 +7,9 @@ import torch.nn.functional as F
 import logging
 from scipy import ndimage
 
-from lib.pvtv2 import pvt_v2_b2
-from lib.decoders import CASCADE
-from lib.cnn_vit_backbone import Transformer, SegmentationHead
+from third_party.cascade.lib.pvtv2 import pvt_v2_b2
+from third_party.cascade.lib.decoders import CASCADE
+from third_party.cascade.lib.cnn_vit_backbone import Transformer, SegmentationHead
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ def np2th(weights, conv=False):
     return torch.from_numpy(weights)
     
 class PVT_CASCADE(nn.Module):
-    def __init__(self, n_class=1):
+    def __init__(self, n_class=1, pretrained_path=None):
         super(PVT_CASCADE, self).__init__()
 
         # conv block to convert single channel to 3 channels
@@ -32,13 +32,12 @@ class PVT_CASCADE(nn.Module):
         
         # backbone network initialization with pretrained weight
         self.backbone = pvt_v2_b2()  # [64, 128, 320, 512]
-        path = './pretrained_pth/pvt/pvt_v2_b2.pth'
-        save_model = torch.load(path)
-        model_dict = self.backbone.state_dict()
-        state_dict = {k: v for k, v in save_model.items() if k in model_dict.keys()}
-        model_dict.update(state_dict)
-        self.backbone.load_state_dict(model_dict)
-        
+        if pretrained_path is not None:
+            save_model = torch.load(pretrained_path, map_location='cpu', weights_only=True)
+            model_dict = self.backbone.state_dict()
+            model_dict.update({k: v for k, v in save_model.items() if k in model_dict})
+            self.backbone.load_state_dict(model_dict)
+
         # decoder initialization
         self.decoder = CASCADE(channels=[512, 320, 128, 64])
         

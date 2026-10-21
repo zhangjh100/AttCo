@@ -1,4 +1,4 @@
-from networks.MedNeXt.mednextv1.MedNextV1 import MedNeXt
+from third_party.efficientmednext.networks.MedNeXt.mednextv1.MedNextV1 import MedNeXt
 
 def create_mednextv1_small(num_input_channels, num_classes, kernel_size=3, n_channels=32, ds=False):
 

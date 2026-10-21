@@ -1,7 +1,7 @@
 #from networks.MedNeXt.mednextv1.MD_MedNextOV1 import MD_MedNeXtO
-from networks.MedNeXt.mednextv1.EfficientMedNext import EfficientMedNeXt
+from third_party.efficientmednext.networks.MedNeXt.mednextv1.EfficientMedNext import EfficientMedNeXt
 
-from networks.MedNeXt.mednextv1.EfficientMedNext_Full import EfficientMedNeXt_L
+from third_party.efficientmednext.networks.MedNeXt.mednextv1.EfficientMedNext_Full import EfficientMedNeXt_L
 #from networks.MedNeXt.mednextv1.MD_MedNextOVF import MD_MedNeXtO
 
 def create_efficient_mednext_tiny(num_input_channels, num_classes, n_channels=32, kernel_sizes=[1,3,5], strides=[1,1,1], uniform_dec_channels=None, ds=False, mode='train'):

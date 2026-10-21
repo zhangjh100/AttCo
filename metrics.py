@@ -202,9 +202,9 @@ class ACDCDiceMetrics(DiceMetrics):
 
     @torch.no_grad()
     def forward(self, logits, labels):
-        if logits.ndim != 4 or logits.shape[1] != 4:
+        if logits.ndim not in (4,5) or logits.shape[1] != 4:
             raise ValueError('Expected ACDC logits [B,4,H,W]')
-        if labels.ndim == 4 and labels.shape[1] == 1:
+        if labels.ndim == logits.ndim and labels.shape[1] == 1:
             labels = labels[:, 0]
         pred = logits.argmax(1)
         labels = labels.to(pred.device)

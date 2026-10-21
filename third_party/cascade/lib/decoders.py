@@ -3,12 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
 
-from PIL import Image
-import cv2
 import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-import scipy.misc     
 
 class conv_block(nn.Module):
     def __init__(self,ch_in,ch_out):

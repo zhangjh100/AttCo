@@ -75,3 +75,27 @@ ACDC entry points reject those models before loading data: their original 3D
 pipelines must be adapted separately before they can train on ACDC slices.
 To add another compatible model, add its module/class/dataset/layout tuple to
 MODEL_REGISTRY and keep its constructor compatible with inChannel/outChannel/baseChannel.
+
+
+### Quantitative results for statistical analysis
+
+Every test.py run writes two CSV files under --output_path, regardless of
+--save_pred:
+
+- test_results_fold_N.csv: one row per patient-phase, retaining original-grid
+  3D Dice_RV, Dice_MYO, Dice_LV and Dice_mean.
+- patient_results_fold_N.csv: one row per patient, with separate *_ED and *_ES
+  scores. Unsuffixed Dice_RV/MYO/LV are the arithmetic ED/ES means; Dice_mean
+  averages all three structures and both phases. Scores range from 0 to 1,
+  not percentages. Both-empty structures follow the existing Dice=1 convention.
+
+Both tables include model, fold, checkpoint and patient_id. The patient table
+requires exactly one ED and one ES result per patient. Missing or duplicate
+phases are errors. Keep the original scores for downstream analysis; p-values
+and confidence intervals are not calculated automatically. For paired model
+comparisons, align patient rows using patient_id and fold (with identical fold
+splits); ED/ES and slices from one patient are correlated observations. Concatenate
+the five held-out patient tables to obtain the full out-of-fold patient dataset.
+Do not include repeated runs of the same patient as independent patients.
+
+对比模型（原生 2D/3D 输入）的论文出处、具体版本、安装和训练测试命令见 [BASELINES.md](BASELINES.md)。

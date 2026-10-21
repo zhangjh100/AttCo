@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.utils.checkpoint as checkpoint
 
-from networks.MedNeXt.mednextv1.efficient_mednext_blocks import *
+from third_party.efficientmednext.networks.MedNeXt.mednextv1.efficient_mednext_blocks import *
 
 class EfficientMedNeXt(nn.Module):
 

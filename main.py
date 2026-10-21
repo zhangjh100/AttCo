@@ -1,4 +1,9 @@
 import os
+import json
+from pathlib import Path
+from models.baselines import (MODEL_REGISTRY, build_model, validate_model_config,
+                              prediction_logits, segmentation_loss)
+from comparison_data import build_dataset
 import pandas as pd
 import numpy as np
 import torch
@@ -81,7 +86,7 @@ def main():
                         required=True,
                         help="ACDC training root containing patientXXX directories")
     parser.add_argument('--pretrained', type=str, default=None, help='')
-    parser.add_argument('--modelname', type=str, default="Wave", help='model name')
+    parser.add_argument('--modelname', type=str, default="Wave", choices=tuple(MODEL_REGISTRY), help='model name')
     parser.add_argument('--dataname', type=str, default="ACDC", choices=("ACDC",), help="dataset name")
     parser.add_argument('--train_mode', choices=('single', 'multi', 'cpu'), default='single')
     parser.add_argument('--gpu_ids', type=parse_gpu_ids, default=[0],
@@ -91,9 +96,14 @@ def main():
     parser.add_argument('--checkpoint_dir', default='./checkpoint')
 
     parser.add_argument('--image_size', type=int, nargs=2, default=(224, 224), metavar=('H', 'W'))
+    parser.add_argument('--volume_size', type=int, nargs=3, default=(32,128,128), metavar=('D','H','W'))
     parser.add_argument('--base_channels', type=int, default=16)
     parser.add_argument('--num_workers', type=int, default=0)
     arg = parser.parse_args()
+    try:
+        validate_model_config(arg.modelname,arg.base_channels,arg.image_size,arg.volume_size)
+    except ValueError as exc:
+        parser.error(str(exc))
     if min(arg.image_size) < 64 or any(n % 32 for n in arg.image_size):
         parser.error('--image_size must contain multiples of 32, at least 64')
     if min(arg.train_batch_size, arg.val_batch_size, arg.epochs) < 1 or arg.num_workers < 0:
@@ -121,13 +131,13 @@ def main():
         save_dir = os.path.join(arg.checkpoint_dir, arg.dataname, arg.modelname)
         os.makedirs(save_dir, exist_ok=True)
 
-        # 模型初始化
-        if arg.modelname == "WaveDe":
-            import models.WaveDe_ACDC as net
-            model = net.WaveDe(inChannel=1, outChannel=4, baseChannel=arg.base_channels)
-
-        else:
-            raise ValueError(f"Unsupported model: {arg.modelname}")
+        model = build_model(arg.modelname, arg.base_channels, arg.image_size, arg.volume_size)
+        config = dict(vars(arg))
+        config['input_dim'] = MODEL_REGISTRY[arg.modelname]
+        config['initialization'] = 'checkpoint' if arg.pretrained else 'scratch (native constructor)'
+        config['upstream'] = {p.parent.name: json.loads(p.read_text()) for p in Path('third_party').glob('*/UPSTREAM.json')}
+        with open(os.path.join(save_dir, f'config_fold_{fold}.json'), 'w') as handle:
+            json.dump(config, handle, indent=2)
 
         # Volume normalization and planar resizing are handled by ACDCDataset.
         train_transforms = transforms.Compose([
@@ -139,8 +149,8 @@ def main():
         # 数据集
         listTrainPatients = list(frame["ID"][frame["Fold_{}".format(fold)] == 1])
         listValPatients = list(frame["ID"][frame["Fold_{}".format(fold)] == 0])
-        train_set = dataset.ACDCDataset(arg.path_image, listTrainPatients, transforms=train_transforms, mode="train", output_size=arg.image_size)
-        val_set = dataset.ACDCDataset(arg.path_image, listValPatients, transforms=val_transforms, mode="val", output_size=arg.image_size)
+        train_set = build_dataset(arg.modelname, arg.path_image, listTrainPatients, volume_size=arg.volume_size, transforms=train_transforms, mode="train", output_size=arg.image_size)
+        val_set = build_dataset(arg.modelname, arg.path_image, listValPatients, volume_size=arg.volume_size, transforms=val_transforms, mode="val", output_size=arg.image_size)
 
         if not listTrainPatients or not listValPatients or set(listTrainPatients) & set(listValPatients):
             raise ValueError("Expected non-empty, disjoint patient splits")
@@ -160,7 +170,8 @@ def main():
             print("Loaded pretrained model")
         else:
             print("Training from Scratch")
-            init_weights(model)  # Exactly once, rather than nested apply calls.
+            if arg.modelname in ('Wave','WaveDe','EMCAD','EffiDec3D'):
+                init_weights(model)  # Preserve native initialization of official baselines.
         model = model.to(device)
         if arg.train_mode == 'multi':
             model = nn.DataParallel(model, device_ids=gpu_ids, output_device=gpu_ids[0])
@@ -185,7 +196,7 @@ def main():
                 optimizer.zero_grad(set_to_none=True)
                 output = model(input)
 
-                loss = criterion(output, target)
+                loss = segmentation_loss(criterion, output, target)
 
                 loss.backward()
                 optimizer.step()
@@ -193,7 +204,7 @@ def main():
                 loss_train += loss.item() * input.shape[0]
 
                 # Dice
-                dice = dice_metric(output.detach(), target)
+                dice = dice_metric(prediction_logits(output, arg.modelname).detach(), target)
                 for i in range(3):
                     dice_train[i] += dice[i].item() * input.shape[0]
 
@@ -214,11 +225,11 @@ def main():
                     input, target = sample["input"].to(device), sample["target"].long().to(device)
                     output = model(input)
 
-                    loss = criterion(output, target)
+                    loss = segmentation_loss(criterion, output, target)
 
                     loss_val += loss.item() * input.shape[0]
 
-                    volume_dice.update(output.argmax(1), target, sample['volume_id'])
+                    volume_dice.update(prediction_logits(output, arg.modelname).argmax(1), target, sample['volume_id'])
 
             n_val = len(val_set)
             if n_val == 0:
@@ -234,7 +245,7 @@ def main():
                 print("Saving model: ", filename)
 
             print(f"[Epoch {epoch + 1}/{arg.epochs}] Train loss: {loss_train:.4f} | Val loss: {loss_val:.4f}")
-            print("Train slice Dice:", dict(zip(('RV', 'MYO', 'LV'), dice_train)))
+            print("Train sample Dice:", dict(zip(('RV', 'MYO', 'LV'), dice_train)))
             print("Val volume Dice (resized grid):", dict(zip(('RV', 'MYO', 'LV'), dice_val)))
             log_data.append([epoch + 1, loss_train, *dice_train, loss_val, *dice_val])
             columns = ['Epoch', 'Loss_train', 'Dice_RV_train', 'Dice_MYO_train',
