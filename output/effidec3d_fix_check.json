@@ -1,0 +1,14 @@
+[
+  {
+    "model": "EffiDec3D",
+    "status": "passed",
+    "shape": [
+      1,
+      4,
+      32,
+      32,
+      32
+    ],
+    "seconds": 5.4
+  }
+]
