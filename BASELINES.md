@@ -1,5 +1,23 @@
 # ACDC 对比模型接入说明
 
+## MnM（M&Ms）数据集
+
+训练和评估入口支持 `--dataname MnM`（默认仍为 ACDC），模型和 2D / 2.5D / 3D 输入选择方式一致：
+
+```bash
+python main.py --dataname MnM --train_batch_size 32 --path_image /datapool/home/ph_teacher1/zhangjh/datasets/MnM/Training --modelname EMCAD
+python main.py --dataname MnM --train_batch_size 1 --path_image /datapool/home/ph_teacher1/zhangjh/datasets/MnM/Training --modelname EffiDec3D
+python test.py --dataname MnM --path_image /datapool/home/ph_teacher1/zhangjh/datasets/MnM/Training --modelname EMCAD --fold 0 --pretrained checkpoint/MnM/EMCAD/best_fold_0.pt --save_pred --output_path test_predictions/MnM/EMCAD
+```
+
+路径支持 `MnM/`、`MnM/Training/`、`MnM/Training/Labeled/`，或直接包含影像的目录。每例文件为 `<ID>_sa.nii[.gz]` 和 `<ID>_sa_gt.nii[.gz]`，可置于同名 ID 子目录。只加载五折 CSV 明确指定的患者，不扫描并混入未标注病例。
+
+默认自动使用 `MnMs_Training_5folds.csv`，不改变已有五折划分；`--csv_path` 可覆盖。`MnMs_metadata.csv` 保存原始患者 ED/ES 等信息，随代码上传服务器，`--metadata_path` 可覆盖。ED/ES 按元数据中的 **0 起始帧索引** 从四维短轴 cine 中提取，各阶段独立采样，相邻通道只使用空间相邻切片。
+
+原始 MnM 标签为 1=LV、2=MYO、3=RV；训练和 Dice 统计映射到项目统一的 1=RV、2=MYO、3=LV。保存的预测 NIfTI 还原为 MnM 原始标签，并保留所提取三维阶段的空间几何信息。权重和配置保存于 `checkpoint/MnM/<模型>/`，默认五折、每折 400 epochs。源标签说明见 [M&Ms 参赛实现](https://github.com/MarioProjects/MnMsCardiac)。
+
+本接入通过合成四维 cine 的输入、标签映射和 2D/3D 训练评估测试；真实服务器文件尚未读取。若使用重新预处理过的三维或标签已重映射的数据，需要按其实际格式另行适配，不能按原始四维数据重复转换。
+
 当前项目的训练数据集是 ACDC，标签为背景=0、RV=1、MYO=2、LV=3。全部模型使用同一份患者级五折 CSV；ED/ES 不会跨患者或跨阶段拼接。
 
 ## 模型、论文和具体版本

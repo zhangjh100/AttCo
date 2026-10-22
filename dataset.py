@@ -336,7 +336,8 @@ class ACDCDataset(MedDataset):
             self._cache.move_to_end(volume_id)
             return self._cache[volume_id]
         record = self.volumes[volume_id]
-        image_itk = sitk.ReadImage(record['image_path'])
+        from mnm_data import read_phase_image
+        image_itk = read_phase_image(record)
         image = sitk.GetArrayFromImage(image_itk).astype(np.float32)
         if image.ndim != 3 or not np.isfinite(image).all():
             raise ValueError(f'Invalid volume: {volume_id}')
@@ -348,7 +349,7 @@ class ACDCDataset(MedDataset):
                 image[foreground] = (values - values.mean()) / max(float(values.std()), 1e-6)
         mask = None
         if self.require_target:
-            mask_itk = sitk.ReadImage(record['mask_path'])
+            mask_itk = read_phase_image(record, mask=True)
             for getter in ('GetSize', 'GetSpacing', 'GetOrigin', 'GetDirection'):
                 if not np.allclose(getattr(image_itk, getter)(), getattr(mask_itk, getter)()):
                     raise ValueError(f'Image/mask geometry mismatch: {volume_id}')

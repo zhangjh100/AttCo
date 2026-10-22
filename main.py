@@ -4,6 +4,7 @@ from pathlib import Path
 from models.baselines import (MODEL_REGISTRY, build_model, validate_model_config,
                               prediction_logits, segmentation_loss)
 from comparison_data import build_dataset
+from mnm_data import DATASETS, PROJECT_ROOT
 import pandas as pd
 import numpy as np
 import torch
@@ -84,15 +85,16 @@ def main():
     parser.add_argument('--is_thop', type=bool, default=True, help='whether calculate FLOPs/Params')
     parser.add_argument('--path_image', type=str,
                         required=True,
-                        help="ACDC root or training directory containing patientXXX directories")
+                        help="ACDC or MnM root / training directory")
     parser.add_argument('--pretrained', type=str, default=None, help='')
     parser.add_argument('--modelname', type=str, default="Wave", choices=tuple(MODEL_REGISTRY), help='model name')
-    parser.add_argument('--dataname', type=str, default="ACDC", choices=("ACDC",), help="dataset name")
+    parser.add_argument('--dataname', type=str, default="ACDC", choices=tuple(DATASETS), help="dataset name")
     parser.add_argument('--train_mode', choices=('single', 'multi', 'cpu'), default='single')
     parser.add_argument('--gpu_ids', type=parse_gpu_ids, default=[0],
                         help='Visible GPU ids, e.g. 0 or 0,1; batch size is total across GPUs')
     parser.add_argument('--folds', type=int, nargs='+', default=list(range(5)))
-    parser.add_argument('--csv_path', default=str(Path(__file__).resolve().parent / 'ACDC_Training_5folds.csv'))
+    parser.add_argument('--csv_path', default=None)
+    parser.add_argument('--metadata_path', default=None, help='MnM ED/ES metadata CSV')
     parser.add_argument('--checkpoint_dir', default='./checkpoint')
 
     parser.add_argument('--image_size', type=int, nargs=2, default=(224, 224), metavar=('H', 'W'))
@@ -114,12 +116,15 @@ def main():
     if any(fold not in range(5) for fold in arg.folds) or len(set(arg.folds)) != len(arg.folds):
         parser.error("--folds must contain distinct values from 0 to 4")
     try:
-        arg.path_image = dataset.resolve_acdc_root(arg.path_image)
+        arg.path_image = dataset.resolve_acdc_root(arg.path_image) if arg.dataname == 'ACDC' else str(Path(arg.path_image).expanduser().resolve())
     except FileNotFoundError as exc:
         parser.error(str(exc))
     spatial = tuple(arg.volume_size) if MODEL_REGISTRY[arg.modelname] == '3d' else tuple(arg.image_size)
     print(f'Model: {arg.modelname}; input: {MODEL_REGISTRY[arg.modelname]} {spatial}; '
           f'train batch: {arg.train_batch_size}; folds: {arg.folds}; data: {arg.path_image}')
+    arg.csv_path = arg.csv_path or str(PROJECT_ROOT / DATASETS[arg.dataname])
+    if arg.dataname == 'MnM':
+        arg.metadata_path = arg.metadata_path or str(PROJECT_ROOT / 'MnMs_metadata.csv')
     frame = pd.read_csv(arg.csv_path)
     if frame['ID'].isna().any() or frame['ID'].duplicated().any():
         parser.error('CSV must contain unique, nonempty patient IDs')
@@ -158,8 +163,8 @@ def main():
         # 数据集
         listTrainPatients = list(frame["ID"][frame["Fold_{}".format(fold)] == 1])
         listValPatients = list(frame["ID"][frame["Fold_{}".format(fold)] == 0])
-        train_set = build_dataset(arg.modelname, arg.path_image, listTrainPatients, volume_size=arg.volume_size, transforms=train_transforms, mode="train", output_size=arg.image_size)
-        val_set = build_dataset(arg.modelname, arg.path_image, listValPatients, volume_size=arg.volume_size, transforms=val_transforms, mode="val", output_size=arg.image_size)
+        train_set = build_dataset(arg.modelname, arg.path_image, listTrainPatients, volume_size=arg.volume_size, transforms=train_transforms, mode="train", output_size=arg.image_size, dataname=arg.dataname, metadata_path=arg.metadata_path)
+        val_set = build_dataset(arg.modelname, arg.path_image, listValPatients, volume_size=arg.volume_size, transforms=val_transforms, mode="val", output_size=arg.image_size, dataname=arg.dataname, metadata_path=arg.metadata_path)
 
         if not listTrainPatients or not listValPatients or set(listTrainPatients) & set(listValPatients):
             raise ValueError("Expected non-empty, disjoint patient splits")

@@ -11,6 +11,7 @@ from torch.nn import functional as F
 from tqdm import tqdm
 import dataset
 from comparison_data import build_dataset
+from mnm_data import DATASETS, PROJECT_ROOT, read_phase_image
 import transforms
 import metrics
 from main import MODEL_REGISTRY, build_model, validate_model_config
@@ -52,7 +53,9 @@ def main():
     parser.add_argument('--pretrained', required=True)
     parser.add_argument('--modelname', choices=tuple(MODEL_REGISTRY), default='Wave',
                         help='Must match the architecture used for training')
-    parser.add_argument('--csv_path', default=str(Path(__file__).resolve().parent / 'ACDC_Training_5folds.csv'))
+    parser.add_argument('--csv_path', default=None)
+    parser.add_argument('--dataname', choices=tuple(DATASETS), default='ACDC')
+    parser.add_argument('--metadata_path', default=None)
     parser.add_argument('--fold', type=int, choices=range(5), default=0)
     parser.add_argument('--test_batch_size', type=int, default=1)
     parser.add_argument('--image_size', type=int, nargs=2, default=(224, 224))
@@ -77,6 +80,8 @@ def main():
     config_path = Path(args.pretrained).parent / f'config_fold_{args.fold}.json'
     if config_path.is_file():
         saved = json.loads(config_path.read_text())
+        if saved.get('dataname', 'ACDC') != args.dataname:
+            parser.error('Checkpoint configuration uses a different dataset')
         if saved['modelname'] != args.modelname:
             parser.error('Checkpoint configuration uses a different modelname')
         size_key = 'volume_size' if MODEL_REGISTRY[args.modelname] == '3d' else 'image_size'
@@ -84,12 +89,13 @@ def main():
             parser.error(f'Checkpoint configuration requires --{size_key} ' + ' '.join(map(str, saved[size_key])))
         if args.modelname in ('Wave', 'WaveDe') and saved['base_channels'] != args.base_channels:
             parser.error('Checkpoint configuration uses different base_channels')
+    args.csv_path = args.csv_path or str(PROJECT_ROOT / DATASETS[args.dataname])
     frame = pd.read_csv(args.csv_path)
     patients = frame.loc[frame[f'Fold_{args.fold}'] == 0, 'ID'].tolist()
     if not patients:
         raise ValueError('No held-out patients')
     data = build_dataset(args.modelname, args.path_image, patients, mode='val', volume_size=args.volume_size,
-                              transforms=transforms.ToTensor(), output_size=args.image_size)
+                              transforms=transforms.ToTensor(), output_size=args.image_size, dataname=args.dataname, metadata_path=args.metadata_path)
     loader = DataLoader(data, batch_size=args.test_batch_size, shuffle=False,
                         num_workers=args.num_workers, pin_memory=device.type == 'cuda')
     model = build_model(args.modelname, args.base_channels, args.image_size, args.volume_size)
@@ -108,8 +114,8 @@ def main():
         record = data.volumes[volume_id]
         if len(seen_slices) != int(record['volume_shape'][0]):
             raise ValueError(f'Incomplete volume: {volume_id}')
-        reference = sitk.ReadImage(record['image_path'])
-        target = sitk.GetArrayFromImage(sitk.ReadImage(record['mask_path']))
+        reference = read_phase_image(record)
+        target = sitk.GetArrayFromImage(read_phase_image(record, mask=True))
         scores.update(prediction[None], target[None], [volume_id])
         dice = scores.compute()[-1]
         rows.append(dict(model=args.modelname, fold=args.fold,
@@ -118,12 +124,16 @@ def main():
                          phase=record['phase'], Dice_RV=dice[0], Dice_MYO=dice[1],
                          Dice_LV=dice[2], Dice_mean=float(dice.mean())))
         if args.save_pred:
-            result = sitk.GetImageFromArray(prediction)
+            native = prediction.copy()
+            if args.dataname == 'MnM':
+                native[prediction == 1] = 3
+                native[prediction == 3] = 1
+            result = sitk.GetImageFromArray(native)
             result.CopyInformation(reference)
             sitk.WriteImage(result, str(output_path / f'{volume_id}_pred.nii.gz'))
 
     with torch.no_grad():
-        for sample in tqdm(loader, desc='ACDC evaluation'):
+        for sample in tqdm(loader, desc=f'{args.dataname} evaluation'):
             logits = model(sample['input'].to(device))
             for i, volume_id in enumerate(sample['volume_id']):
                 if MODEL_REGISTRY[args.modelname] == '3d':

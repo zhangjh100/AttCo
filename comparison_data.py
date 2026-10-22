@@ -4,6 +4,7 @@ import torch
 from scipy.ndimage import zoom, rotate
 from dataset import ACDCDataset
 from models.baselines import MODEL_REGISTRY
+from mnm_data import MnMDataset
 
 class ACDCSliceDataset(ACDCDataset):
     def __getitem__(self,index):
@@ -38,9 +39,22 @@ class ACDCVolumeDataset(ACDCDataset):
         if y is not None: sample['target']=torch.from_numpy(np.ascontiguousarray(y)).long()
         return sample
 
-def build_dataset(name,path,patients,mode='train',output_size=(224,224),volume_size=(32,128,128),transforms=None):
+class MnMSliceDataset(ACDCSliceDataset, MnMDataset):
+    pass
+
+
+class MnMVolumeDataset(ACDCVolumeDataset, MnMDataset):
+    pass
+
+
+def build_dataset(name,path,patients,mode='train',output_size=(224,224),volume_size=(32,128,128),transforms=None,
+                  dataname='ACDC', metadata_path=None):
+    if dataname not in ('ACDC','MnM'):
+        raise ValueError(f'Unknown dataset: {dataname}')
+    extra = dict(metadata_path=metadata_path) if dataname == 'MnM' else {}
     dim=MODEL_REGISTRY[name]
     if dim=='3d':
-        return ACDCVolumeDataset(path,patients,mode=mode,volume_size=volume_size,augment=mode=='train')
-    cls=ACDCSliceDataset if dim=='2d' else ACDCDataset
-    return cls(path,patients,mode=mode,output_size=output_size,transforms=transforms)
+        cls = MnMVolumeDataset if dataname == 'MnM' else ACDCVolumeDataset
+        return cls(path,patients,mode=mode,volume_size=volume_size,augment=mode=='train',**extra)
+    cls = (MnMSliceDataset if dim=='2d' else MnMDataset) if dataname == 'MnM' else (ACDCSliceDataset if dim=='2d' else ACDCDataset)
+    return cls(path,patients,mode=mode,output_size=output_size,transforms=transforms,**extra)
