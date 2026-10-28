@@ -19,6 +19,33 @@ This project is released under the [Apache 2.0 license](LICENSE).
 
 ## ACDC Wave 2.5D
 
+### Params and GFLOPs
+
+Training prints total/trainable Params and inference GFLOPs and saves
+`complexity_fold_N.json` beside the checkpoints. Install `requirements.txt`
+to include the fvcore profiler. `--is_thop false` disables FLOPs tracing while
+retaining parameter counts; this legacy flag now correctly parses true/false.
+Missing profiler dependencies or failed traces are recorded without stopping training.
+
+Measure a model without loading any dataset or starting training:
+
+```sh
+python model_complexity.py --modelname Wave --image_size 224 224 --output complexity_Wave.json
+python model_complexity.py --modelname WaveDe --device cuda:0
+python model_complexity.py --modelname EfficientMedNeXt --volume_size 32 128 128
+```
+
+Input batch size is always 1: `[1,3,H,W]` for Wave/WaveDe (three adjacent
+slices), `[1,1,H,W]` for 2D baselines, and `[1,1,D,H,W]` for 3D models.
+The profiler measures an eval forward, excluding backward/optimizer steps.
+Params includes every registered parameter, including frozen parameters;
+trainable Params is also reported. fvcore counts one multiply-add as one FLOP;
+compare models using the same input dimensions and counting convention.
+Unsupported operations (e.g. FFT or custom CUDA operators) are listed in the JSON.
+When present, `counted_gflops` is only a partial estimate and `gflops` is null.
+Even a successful trace uses fvcore's supported-op coverage, not a count of
+every scalar operation. The model's training/eval flags are restored afterwards.
+
 Expected layout: `training/patient001/Info.cfg`, `patient001_frame01.nii.gz`
 and `patient001_frame01_gt.nii.gz` (frame numbers come from ED/ES in Info.cfg).
 Each sample contains three adjacent spatial slices from one phase, ordered

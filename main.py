@@ -14,6 +14,7 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 import losses, transforms, dataset, metrics
 from torch.nn import init
+from model_complexity import input_shape, measure_complexity, report_complexity, parse_bool
 
 def param_network(model):
     """Print out the network information."""
@@ -82,7 +83,8 @@ def main():
     parser.add_argument('--lrate', type=float, default=0.001, help='learning rate')
     parser.add_argument('--train_batch_size', type=int, default=4, help='training batch size')
     parser.add_argument('--val_batch_size', type=int, default=1, help='validation batch size')
-    parser.add_argument('--is_thop', type=bool, default=True, help='whether calculate FLOPs/Params')
+    parser.add_argument('--is_thop', type=parse_bool, nargs='?', const=True, default=True,
+                        help='Calculate inference GFLOPs with fvcore; false disables tracing')
     parser.add_argument('--path_image', type=str,
                         required=True,
                         help="ACDC or MnM root / training directory")
@@ -187,10 +189,16 @@ def main():
             if arg.modelname in ('Wave','WaveDe'):
                 init_weights(model)
         model = model.to(device)
+        complexity = measure_complexity(
+            model, input_shape(MODEL_REGISTRY[arg.modelname], arg.image_size, arg.volume_size),
+            calculate_flops=arg.is_thop)
+        complexity.update(model=arg.modelname, base_channels=arg.base_channels)
+        report_complexity(complexity)
+        with open(os.path.join(save_dir, f'complexity_fold_{fold}.json'), 'w') as handle:
+            json.dump(complexity, handle, indent=2)
         if arg.train_mode == 'multi':
             model = nn.DataParallel(model, device_ids=gpu_ids, output_device=gpu_ids[0])
 
-        param_network(model)
         optimizer = torch.optim.Adam(model.parameters(), lr=arg.lrate, betas=(0.9, 0.99))
 
         # 损失函数
