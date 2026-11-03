@@ -113,7 +113,7 @@ class MedDataset(Dataset):
                 y = torch.from_numpy(np.ascontiguousarray(y))
             if y.ndim != 2 or tuple(y.shape) != tuple(x.shape[-2:]):
                 raise ValueError("Center target must be [H,W] aligned with input")
-            if not bool(((y >= 0) & (y <= 3) & (y == y.round())).all()):
+            if not bool(((y >= 0) & (y < getattr(self, 'num_classes', 4)) & (y == y.round())).all()):
                 raise ValueError("Transforms must preserve integer class labels 0,1,2,3")
             sample['target'] = y.long().contiguous()
             sample.update(self._region_masks(sample['target']))
@@ -354,7 +354,7 @@ class ACDCDataset(MedDataset):
                 if not np.allclose(getattr(image_itk, getter)(), getattr(mask_itk, getter)()):
                     raise ValueError(f'Image/mask geometry mismatch: {volume_id}')
             mask = sitk.GetArrayFromImage(mask_itk)
-            if not np.isin(mask, (0, 1, 2, 3)).all():
+            if not np.isin(mask, range(getattr(self, 'num_classes', 4))).all():
                 raise ValueError('ACDC requires labels 0,1,2,3; do not apply BraTS mapping')
             mask = mask.astype(np.int64)
         result = image, mask

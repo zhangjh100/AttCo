@@ -5,6 +5,7 @@ from scipy.ndimage import zoom, rotate
 from dataset import ACDCDataset
 from models.baselines import MODEL_REGISTRY
 from mnm_data import MnMDataset
+from emidec_data import EMIDECDataset
 
 class ACDCSliceDataset(ACDCDataset):
     def __getitem__(self,index):
@@ -47,8 +48,20 @@ class MnMVolumeDataset(ACDCVolumeDataset, MnMDataset):
     pass
 
 
+class EMIDECSliceDataset(ACDCSliceDataset, EMIDECDataset):
+    pass
+
+class EMIDECVolumeDataset(ACDCVolumeDataset, EMIDECDataset):
+    pass
+
 def build_dataset(name,path,patients,mode='train',output_size=(224,224),volume_size=(32,128,128),transforms=None,
                   dataname='ACDC', metadata_path=None):
+    if dataname == 'EMIDEC':
+        dim = MODEL_REGISTRY[name]
+        if dim == '3d':
+            return EMIDECVolumeDataset(path, patients, mode=mode, volume_size=volume_size, augment=mode=='train')
+        cls = EMIDECSliceDataset if dim == '2d' else EMIDECDataset
+        return cls(path, patients, mode=mode, output_size=output_size, transforms=transforms)
     if dataname not in ('ACDC','MnM'):
         raise ValueError(f'Unknown dataset: {dataname}')
     extra = dict(metadata_path=metadata_path) if dataname == 'MnM' else {}

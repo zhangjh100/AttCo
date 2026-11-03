@@ -126,3 +126,39 @@ the five held-out patient tables to obtain the full out-of-fold patient dataset.
 Do not include repeated runs of the same patient as independent patients.
 
 对比模型（原生 2D/3D 输入）的论文出处、具体版本、安装和训练测试命令见 [BASELINES.md](BASELINES.md)。
+
+### EMIDEC (official NIfTI download)
+
+Use the extracted dataset directory containing `Case*/Images/*.nii[.gz]` and
+`Case*/Contours/*.nii[.gz]`. Wrapper directories are discovered recursively.
+No conversion or MnM metadata CSV is required. Native labels are retained:
+0 background, 1 cavity, 2 normal myocardium, 3 infarction, 4 no-reflow.
+All registered models use five output classes for EMIDEC.
+
+```bash
+python main.py --dataname EMIDEC --path_image /data/EMIDEC --modelname Wave --folds 0
+python test.py --dataname EMIDEC --path_image /data/EMIDEC --modelname Wave --fold 0 --pretrained checkpoint/EMIDEC/Wave/best_fold_0.pt --save_pred
+```
+
+The first run creates `EMIDEC_Training_5folds.csv` from labelled cases using
+seed 100 and patient-level five-fold splits (balanced across N/P case suffixes).
+Keep this file for reproducibility; `--csv_path` selects a custom split file.
+Test evaluates held-out labelled patients, reports four foreground Dice scores,
+and optionally exports predictions in original geometry with original labels.
+The official challenge test download has no public contours and cannot be used
+for Dice evaluation. Training and validation require contours.
+Official dataset specification: https://emidec.com/dataset
+
+EMIDEC fixed five-fold split is provided in `EMIDEC_Training_5folds.csv`, generated
+from the 100 labelled official cases (33 normal / 67 pathological) with seed 100.
+It uses the same schema as ACDC: `ID,Fold_0,Fold_1,Fold_2,Fold_3,Fold_4`, where
+1 means training and 0 means held-out validation/test. Each fold has 80 training
+and 20 held-out patients; each patient is held out exactly once. Normal/pathological
+held-out counts are 7/13, 7/13, 7/13, 6/14 and 6/14. See `EMIDEC_5fold_summary.csv`.
+This is a project-defined reproducible split, not an official challenge split.
+
+Run all five folds on the local dataset:
+
+```bash
+python main.py --dataname EMIDEC --path_image D:/data_download/EMIDEC/EMIDEC --folds 0 1 2 3 4
+```

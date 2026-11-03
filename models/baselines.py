@@ -72,27 +72,27 @@ def segmentation_loss(criterion, output, target):
     outputs=output if isinstance(output,(tuple,list)) else (output,)
     return sum(criterion(y,target) for y in outputs)/len(outputs)
 
-def build_model(name,base_channels=16,image_size=(224,224),volume_size=(32,128,128)):
+def build_model(name,base_channels=16,image_size=(224,224),volume_size=(32,128,128),num_classes=4):
     validate_model_config(name,base_channels,image_size,volume_size)
     if name in ('Wave','WaveDe'):
         module=importlib.import_module(f'models.{name}_ACDC')
-        return getattr(module,name)(inChannel=1,outChannel=4,baseChannel=base_channels)
+        return getattr(module,name)(inChannel=1,outChannel=num_classes,baseChannel=base_channels)
     try:
-        if name=='U-Net': net=UNet()
+        if name=='U-Net': net=UNet(classes=num_classes)
         elif name=='EMCAD':
             from third_party.emcad.lib.networks import EMCADNet
-            net=EMCADNet(num_classes=4,encoder='pvt_v2_b2',pretrain=False)
+            net=EMCADNet(num_classes=num_classes,encoder='pvt_v2_b2',pretrain=False)
         elif name=='CASCADE':
             from third_party.cascade.lib.networks import PVT_CASCADE
-            net=PVT_CASCADE(n_class=4,pretrained_path=None)
+            net=PVT_CASCADE(n_class=num_classes,pretrained_path=None)
         elif name=='MT-UNet':
             from third_party.mt_unet.model.MTUNet import MTUNet
-            net=MTUNet(out_ch=4)
+            net=MTUNet(out_ch=num_classes)
         elif name=='TransUNet':
             from third_party.transunet.networks.vit_seg_modeling import VisionTransformer, CONFIGS
             config=copy.deepcopy(CONFIGS['R50-ViT-B_16'])
-            config.n_classes=4; config.n_skip=3; config.patches.grid=(14,14)
-            net=VisionTransformer(config,img_size=224,num_classes=4)
+            config.n_classes=num_classes; config.n_skip=3; config.patches.grid=(14,14)
+            net=VisionTransformer(config,img_size=224,num_classes=num_classes)
         elif name=='Mamba-UNet':
             try:
                 from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
@@ -102,13 +102,13 @@ def build_model(name,base_channels=16,image_size=(224,224),volume_size=(32,128,1
             from third_party.mamba_unet.code.networks.vision_mamba import MambaUnet
             cfg=NS(MODEL=NS(VSSM=NS(PATCH_SIZE=4,IN_CHANS=3,EMBED_DIM=96,DEPTHS=[2,2,2,2]),
                 SWIN=NS(MLP_RATIO=4.,PATCH_NORM=True),DROP_RATE=0.,DROP_PATH_RATE=0.2),TRAIN=NS(USE_CHECKPOINT=False))
-            net=MambaUnet(cfg,img_size=224,num_classes=4)
+            net=MambaUnet(cfg,img_size=224,num_classes=num_classes)
         elif name=='EffiDec3D':
             from third_party.effidec3d.networks.MedNeXt.mednextv1.create_mednextv1_effidec3d import create_mednextv1_effidec3d
-            net=create_mednextv1_effidec3d(1,4,'M',kernel_size=3,n_channels=32,deep_supervision=True,mode='train')
+            net=create_mednextv1_effidec3d(1,num_classes,'M',kernel_size=3,n_channels=32,deep_supervision=True,mode='train')
         elif name=='EfficientMedNeXt':
             from third_party.efficientmednext.networks.MedNeXt.mednextv1.create_efficient_mednext import create_efficient_mednext
-            net=create_efficient_mednext(1,4,'T',n_channels=32,deep_supervision=True,mode='train')
+            net=create_efficient_mednext(1,num_classes,'T',n_channels=32,deep_supervision=True,mode='train')
     except ImportError as exc:
         raise RuntimeError(f'{name}: missing dependency {exc.name}. Install requirements-baselines.txt') from exc
     return NativeOutput(net,name)

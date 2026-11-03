@@ -7,7 +7,7 @@ import SimpleITK as sitk
 from dataset import ACDCDataset
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DATASETS = {'ACDC': 'ACDC_Training_5folds.csv', 'MnM': 'MnMs_Training_5folds.csv'}
+DATASETS = {'ACDC': 'ACDC_Training_5folds.csv', 'MnM': 'MnMs_Training_5folds.csv', 'EMIDEC': 'EMIDEC_Training_5folds.csv'}
 
 
 def read_phase_image(record, mask=False):

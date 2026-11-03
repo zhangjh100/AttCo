@@ -127,6 +127,11 @@ def main():
     arg.csv_path = arg.csv_path or str(PROJECT_ROOT / DATASETS[arg.dataname])
     if arg.dataname == 'MnM':
         arg.metadata_path = arg.metadata_path or str(PROJECT_ROOT / 'MnMs_metadata.csv')
+    num_classes = 5 if arg.dataname == 'EMIDEC' else 4
+    class_names = ('Cavity', 'MYO', 'Infarction', 'NoReflow') if num_classes == 5 else ('RV', 'MYO', 'LV')
+    if arg.dataname == 'EMIDEC':
+        from emidec_data import ensure_folds
+        ensure_folds(arg.path_image, arg.csv_path)
     frame = pd.read_csv(arg.csv_path)
     if frame['ID'].isna().any() or frame['ID'].duplicated().any():
         parser.error('CSV must contain unique, nonempty patient IDs')
@@ -145,7 +150,7 @@ def main():
         save_dir = os.path.join(arg.checkpoint_dir, arg.dataname, arg.modelname)
         os.makedirs(save_dir, exist_ok=True)
 
-        model = build_model(arg.modelname, arg.base_channels, arg.image_size, arg.volume_size)
+        model = build_model(arg.modelname, arg.base_channels, arg.image_size, arg.volume_size, num_classes=num_classes)
         config = dict(vars(arg))
         config['input_dim'] = MODEL_REGISTRY[arg.modelname]
         config['initialization'] = ('checkpoint' if arg.pretrained else
@@ -203,14 +208,14 @@ def main():
 
         # 损失函数
         criterion = losses.CE_GeneralizedSoftDiceLoss().to(device)
-        dice_metric = metrics.ACDCDiceMetrics()
+        dice_metric = metrics.ACDCDiceMetrics(num_classes=num_classes)
 
         min_loss = np.inf
         log_data = []
 
         for epoch in range(arg.epochs):
             loss_train = 0.0
-            dice_train = [0]*3
+            dice_train = [0]*(num_classes-1)
 
             model.train()
             for sample in tqdm(dataloaders['train']):
@@ -227,20 +232,20 @@ def main():
 
                 # Dice
                 dice = dice_metric(prediction_logits(output, arg.modelname).detach(), target)
-                for i in range(3):
+                for i in range(num_classes-1):
                     dice_train[i] += dice[i].item() * input.shape[0]
 
             n_train = len(train_set)
             if n_train == 0:
                 raise ValueError("Training loader is empty")
             loss_train /= n_train
-            for i in range(3):
+            for i in range(num_classes-1):
                 dice_train[i] /= n_train
 
             loss_val = 0.0
-            dice_val = [0]*3
+            dice_val = [0]*(num_classes-1)
 
-            volume_dice = metrics.ACDCVolumeDice()
+            volume_dice = metrics.ACDCVolumeDice(num_classes=num_classes)
             model.eval()
             with torch.no_grad():
                 for sample in tqdm(dataloaders['val']):
@@ -267,12 +272,10 @@ def main():
                 print("Saving model: ", filename)
 
             print(f"[Epoch {epoch + 1}/{arg.epochs}] Train loss: {loss_train:.4f} | Val loss: {loss_val:.4f}")
-            print("Train sample Dice:", dict(zip(('RV', 'MYO', 'LV'), dice_train)))
-            print("Val volume Dice (resized grid):", dict(zip(('RV', 'MYO', 'LV'), dice_val)))
+            print("Train sample Dice:", dict(zip(class_names, dice_train)))
+            print("Val volume Dice (resized grid):", dict(zip(class_names, dice_val)))
             log_data.append([epoch + 1, loss_train, *dice_train, loss_val, *dice_val])
-            columns = ['Epoch', 'Loss_train', 'Dice_RV_train', 'Dice_MYO_train',
-                       'Dice_LV_train', 'Loss_val', 'Dice_RV_val',
-                       'Dice_MYO_val', 'Dice_LV_val']
+            columns = ['Epoch', 'Loss_train'] + [f'Dice_{c}_train' for c in class_names] + ['Loss_val'] + [f'Dice_{c}_val' for c in class_names]
             pd.DataFrame(log_data, columns=columns).to_csv(
                 os.path.join(save_dir, f'log_fold_{fold}.csv'), index=False)
 

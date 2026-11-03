@@ -19,6 +19,10 @@ from main import MODEL_REGISTRY, build_model, validate_model_config
 
 
 def patient_results_table(volume_results):
+    if set(volume_results["phase"]) == {"LGE"}:
+        if volume_results.duplicated(["model", "fold", "checkpoint", "patient_id"]).any():
+            raise ValueError("Duplicate EMIDEC patient")
+        return volume_results.drop(columns=["volume_id", "phase"]).copy()
     """One independent patient per row; retain ED/ES and their arithmetic means.
 
     Dice values are original-grid 3D scores on [0,1]. Reject missing/duplicate
@@ -90,6 +94,11 @@ def main():
         if args.modelname in ('Wave', 'WaveDe') and saved['base_channels'] != args.base_channels:
             parser.error('Checkpoint configuration uses different base_channels')
     args.csv_path = args.csv_path or str(PROJECT_ROOT / DATASETS[args.dataname])
+    num_classes = 5 if args.dataname == 'EMIDEC' else 4
+    class_names = ('Cavity', 'MYO', 'Infarction', 'NoReflow') if num_classes == 5 else ('RV', 'MYO', 'LV')
+    if args.dataname == 'EMIDEC':
+        from emidec_data import ensure_folds
+        ensure_folds(args.path_image, args.csv_path)
     frame = pd.read_csv(args.csv_path)
     patients = frame.loc[frame[f'Fold_{args.fold}'] == 0, 'ID'].tolist()
     if not patients:
@@ -98,7 +107,7 @@ def main():
                               transforms=transforms.ToTensor(), output_size=args.image_size, dataname=args.dataname, metadata_path=args.metadata_path)
     loader = DataLoader(data, batch_size=args.test_batch_size, shuffle=False,
                         num_workers=args.num_workers, pin_memory=device.type == 'cuda')
-    model = build_model(args.modelname, args.base_channels, args.image_size, args.volume_size)
+    model = build_model(args.modelname, args.base_channels, args.image_size, args.volume_size, num_classes=num_classes)
     state = torch.load(args.pretrained, map_location='cpu', weights_only=True)
     if 'state_dict' in state:
         state = state['state_dict']
@@ -106,7 +115,7 @@ def main():
     model.to(device).eval()
     output_path = Path(args.output_path)
     output_path.mkdir(parents=True, exist_ok=True)
-    scores = metrics.ACDCVolumeDice()
+    scores = metrics.ACDCVolumeDice(num_classes=num_classes)
     rows = []
     current_id, slices, seen = None, None, set()
 
@@ -121,8 +130,8 @@ def main():
         rows.append(dict(model=args.modelname, fold=args.fold,
                          checkpoint=str(Path(args.pretrained).resolve()),
                          volume_id=volume_id, patient_id=record['patient_id'],
-                         phase=record['phase'], Dice_RV=dice[0], Dice_MYO=dice[1],
-                         Dice_LV=dice[2], Dice_mean=float(dice.mean())))
+                         phase=record['phase'], Dice_mean=float(dice.mean()),
+                         **{f'Dice_{c}': float(v) for c,v in zip(class_names,dice)}))
         if args.save_pred:
             native = prediction.copy()
             if args.dataname == 'MnM':
@@ -171,7 +180,7 @@ def main():
     print('Patient-level results (one row per patient):', patient_csv)
     print('Patients:', len(patient_results))
     mean_dice = scores.compute().mean(axis=0)
-    print('Original-grid patient-phase volume Dice:', dict(zip(('RV', 'MYO', 'LV'), mean_dice)))
+    print('Original-grid patient-phase volume Dice:', dict(zip(class_names, mean_dice)))
     print('Mean Dice:', float(mean_dice.mean()))
 
 
