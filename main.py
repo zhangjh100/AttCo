@@ -154,7 +154,7 @@ def main():
         config = dict(vars(arg))
         config['input_dim'] = MODEL_REGISTRY[arg.modelname]
         config['initialization'] = ('checkpoint' if arg.pretrained else
-                                    'scratch (xavier_uniform_)' if arg.modelname in ('Wave', 'WaveDe')
+                                    'scratch (xavier_uniform_)' if arg.modelname in ('Wave', 'WaveDe', 'WaveFour')
                                     else 'scratch (native constructor)')
         config['upstream'] = {p.parent.name: json.loads(p.read_text()) for p in (Path(__file__).resolve().parent / 'third_party').glob('*/UPSTREAM.json')}
         with open(os.path.join(save_dir, f'config_fold_{fold}.json'), 'w') as handle:
@@ -191,7 +191,7 @@ def main():
             print("Loaded pretrained model")
         else:
             print("Training from Scratch")
-            if arg.modelname in ('Wave','WaveDe'):
+            if arg.modelname in ('Wave','WaveDe','WaveFour'):
                 init_weights(model)
         model = model.to(device)
         complexity = measure_complexity(

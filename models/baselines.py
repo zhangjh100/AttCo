@@ -6,7 +6,7 @@ from torch import nn
 from torch.nn import functional as F
 
 MODEL_REGISTRY = {name: dim for name, dim in (
-    ('Wave', '2.5d'), ('WaveDe', '2.5d'), ('Mamba-UNet', '2d'),
+    ('Wave', '2.5d'), ('WaveDe', '2.5d'), ('WaveFour', '2.5d'), ('Mamba-UNet', '2d'),
     ('EMCAD', '2d'), ('CASCADE', '2d'), ('EffiDec3D', '3d'),
     ('EfficientMedNeXt', '3d'), ('MT-UNet', '2d'), ('TransUNet', '2d'), ('U-Net', '2d'))}
 
@@ -74,7 +74,7 @@ def segmentation_loss(criterion, output, target):
 
 def build_model(name,base_channels=16,image_size=(224,224),volume_size=(32,128,128),num_classes=4):
     validate_model_config(name,base_channels,image_size,volume_size)
-    if name in ('Wave','WaveDe'):
+    if name in ('Wave','WaveDe','WaveFour'):
         module=importlib.import_module(f'models.{name}_ACDC')
         return getattr(module,name)(inChannel=1,outChannel=num_classes,baseChannel=base_channels)
     try:

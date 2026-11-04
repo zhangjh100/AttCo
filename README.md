@@ -162,3 +162,32 @@ Run all five folds on the local dataset:
 ```bash
 python main.py --dataname EMIDEC --path_image D:/data_download/EMIDEC/EMIDEC --folds 0 1 2 3 4
 ```
+
+### Test-time 3D Hausdorff distance
+
+`test.py` also reports symmetric maximum Hausdorff distance (HD, not HD95)
+for each foreground class on reconstructed original-resolution 3D volumes.
+Distances use NIfTI spacing in millimetres (XYZ spacing reversed for ZYX arrays).
+The volume CSV adds `HD_<class>_mm` and `HD_mean_mm`; the patient CSV retains
+ED/ES values and their arithmetic means. EMIDEC has one LGE volume per patient.
+The terminal reports patient-level class means and their macro mean.
+Both masks empty yields HD=0; exactly one empty yields HD=inf, retained in
+CSV and averages rather than dropped. This makes missing structures explicit.
+The normal test command enables HD automatically; no additional dependencies
+or command flags are required.
+
+### WaveFour
+
+WaveFour retains WaveDe's shared ResNet-50 image encoder, two-channel
+MobileNetV2 difference encoder, image-decoder wavelet refinement and direct
+additive encoder skips. It replaces all four difference-decoder deformable
+transformers and the final difference transformer with Wave's `SpectralSCSE`:
+FFT2 -> independent real/imaginary channel-SE residual enhancement -> IFFT2.
+The existing difference transposed-convolution upsampling remains.
+This reuses Wave's Fourier operator on decoder states, not Wave's encoder-skip
+placement. No deformable attention remains; checkpoints are model-specific.
+
+```bash
+python main.py --modelname WaveFour --dataname EMIDEC --path_image /data/EMIDEC --folds 0 1 2 3 4
+python test.py --modelname WaveFour --dataname EMIDEC --path_image /data/EMIDEC --fold 0 --pretrained checkpoint/EMIDEC/WaveFour/best_fold_0.pt --save_pred
+```

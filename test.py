@@ -29,7 +29,7 @@ def patient_results_table(volume_results):
     phases to avoid silently averaging different numbers of observations.
     """
     keys = ['model', 'fold', 'checkpoint', 'patient_id']
-    dice_columns = ['Dice_RV', 'Dice_MYO', 'Dice_LV', 'Dice_mean']
+    dice_columns = [c for c in volume_results.columns if c.startswith(('Dice_', 'HD_'))]
     if volume_results.empty:
         raise ValueError('No volume results to summarize')
     if not volume_results['phase'].isin(['ED', 'ES']).all():
@@ -91,7 +91,7 @@ def main():
         size_key = 'volume_size' if MODEL_REGISTRY[args.modelname] == '3d' else 'image_size'
         if tuple(saved[size_key]) != tuple(getattr(args, size_key)):
             parser.error(f'Checkpoint configuration requires --{size_key} ' + ' '.join(map(str, saved[size_key])))
-        if args.modelname in ('Wave', 'WaveDe') and saved['base_channels'] != args.base_channels:
+        if args.modelname in ('Wave', 'WaveDe', 'WaveFour') and saved['base_channels'] != args.base_channels:
             parser.error('Checkpoint configuration uses different base_channels')
     args.csv_path = args.csv_path or str(PROJECT_ROOT / DATASETS[args.dataname])
     num_classes = 5 if args.dataname == 'EMIDEC' else 4
@@ -127,10 +127,16 @@ def main():
         target = sitk.GetArrayFromImage(read_phase_image(record, mask=True))
         scores.update(prediction[None], target[None], [volume_id])
         dice = scores.compute()[-1]
+        # SimpleITK spacing is XYZ; NumPy masks have axes ZYX.
+        spacing = tuple(reversed(reference.GetSpacing()))
+        hd = np.asarray([metrics.Hausdorff_distance(target == c, prediction == c, spacing=spacing)
+                         for c in range(1, num_classes)])
         rows.append(dict(model=args.modelname, fold=args.fold,
                          checkpoint=str(Path(args.pretrained).resolve()),
                          volume_id=volume_id, patient_id=record['patient_id'],
                          phase=record['phase'], Dice_mean=float(dice.mean()),
+                         HD_mean_mm=float(hd.mean()),
+                         **{f'HD_{c}_mm': float(v) for c,v in zip(class_names,hd)},
                          **{f'Dice_{c}': float(v) for c,v in zip(class_names,dice)}))
         if args.save_pred:
             native = prediction.copy()
@@ -182,6 +188,11 @@ def main():
     mean_dice = scores.compute().mean(axis=0)
     print('Original-grid patient-phase volume Dice:', dict(zip(class_names, mean_dice)))
     print('Mean Dice:', float(mean_dice.mean()))
+    hd_columns = [f'HD_{c}_mm' for c in class_names]
+    mean_hd = patient_results[hd_columns].to_numpy(dtype=float).mean(axis=0)
+    print('Original-grid patient-level 3D HD (mm):', dict(zip(class_names, mean_hd)))
+    print('Mean HD (mm):', float(mean_hd.mean()))
+    print('HD empty-mask rule: both empty = 0; one empty = inf (included in means).')
 
 
 if __name__ == '__main__':

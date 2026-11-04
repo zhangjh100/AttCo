@@ -171,27 +171,36 @@ def border_map(binary_img, neigh=None):
     return mask & ~ndimage.binary_erosion(mask, structure=structure, border_value=0)
 
 
-def border_distance(ref, seg):
+def border_distance(ref, seg, spacing=None):
     border_ref, border_seg = border_map(ref), border_map(seg)
     if border_ref.shape != border_seg.shape:
         raise ValueError('Masks must have the same shape')
     if not border_ref.any() or not border_seg.any():
         raise ValueError('Use Hausdorff_distance for empty-mask handling')
-    distance_ref = ndimage.distance_transform_edt(~border_ref)
-    distance_seg = ndimage.distance_transform_edt(~border_seg)
+    distance_ref = ndimage.distance_transform_edt(~border_ref, sampling=spacing)
+    distance_seg = ndimage.distance_transform_edt(~border_seg, sampling=spacing)
     return border_seg * distance_ref, border_ref * distance_seg
 
 
-def Hausdorff_distance(ref, seg):
-    """Maximum symmetric surface distance in pixels/voxels, not HD95."""
+def Hausdorff_distance(ref, seg, spacing=None):
+    """Symmetric maximum surface distance (HD, not HD95).
+
+    spacing follows array axis order; physical spacing gives distance in mm.
+    Both empty: 0; exactly one empty: infinity (never silently excluded).
+    Omitting spacing retains the historical pixel/voxel units.
+    """
     ref, seg = np.asarray(ref, dtype=bool), np.asarray(seg, dtype=bool)
     if ref.shape != seg.shape:
         raise ValueError('Masks must have the same shape')
+    if spacing is not None:
+        spacing = np.asarray(spacing, dtype=float)
+        if spacing.shape != (ref.ndim,) or not np.isfinite(spacing).all() or (spacing <= 0).any():
+            raise ValueError('spacing must contain one finite positive value per array axis')
     if not ref.any() and not seg.any():
         return 0.0
     if not ref.any() or not seg.any():
         return float('inf')
-    a, b = border_distance(ref, seg)
+    a, b = border_distance(ref, seg, spacing=spacing)
     return float(max(a.max(), b.max()))
 
 
