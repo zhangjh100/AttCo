@@ -39,11 +39,12 @@ class DecoderWaveletRefinement(nn.Module):
     First-level details: independent ordinary multi-kernel signed refinements.
     IWT reconstructs at the current scale; it does NOT perform decoder upsampling.
     """
-    def __init__(self, channels, wavelet, kernels, dilations):
+    def __init__(self, channels, wavelet, kernels, dilations, levels=2):
         super().__init__()
         self.dwt, self.iwt = DWT2D(wavelet), IWT2D(wavelet)
         self.low = MultiKernelDilated(channels, channels, kernels, dilations)
-        self.second = MultiKernelDilated(4 * channels, 4 * channels, kernels, dilations)
+        self.second = MultiKernelDilated(4 * channels, 4 * channels, kernels, dilations) if levels >= 2 else None
+        self.third = MultiKernelDilated(4 * channels, 4 * channels, kernels, dilations) if levels == 3 else None
         self.highs = nn.ModuleList([
             HighBandMultiKernel(channels, channels, kernels) for _ in range(3)])
         self.fuse = conv_norm_act(channels, channels, 1)
@@ -51,8 +52,15 @@ class DecoderWaveletRefinement(nn.Module):
     def forward(self, x):
         bands = self.dwt(x)
         low = self.low(bands[0])
-        packed = torch.cat(self.dwt(low), dim=1)
-        low = self.iwt((packed + self.second(packed)).chunk(4, dim=1), low.shape[-2:])
+        if self.second is not None:
+            packed = torch.cat(self.dwt(low), dim=1)
+            second_bands = (packed + self.second(packed)).chunk(4, dim=1)
+            if self.third is not None:
+                ll = second_bands[0]
+                packed = torch.cat(self.dwt(ll), dim=1)
+                ll = self.iwt((packed + self.third(packed)).chunk(4, dim=1), ll.shape[-2:])
+                second_bands = (ll, *second_bands[1:])
+            low = self.iwt(second_bands, low.shape[-2:])
         highs = [block(band) for block, band in zip(self.highs, bands[1:])]
         return x + self.fuse(self.iwt((low, *highs), x.shape[-2:]))
 
@@ -134,89 +142,111 @@ class DeformableTransformer2D(nn.Module):
 
 class WaveDeDecoderBlock(nn.Module):
     def __init__(self, in_channels, out_channels, image_skip_channels, diff_skip_channels,
-                 wavelet, kernels, dilations, heads, points):
+                 wavelet, kernels, dilations, heads, points, wavelet_levels=2):
         super().__init__()
         # Project before wavelet processing to bound decoder parameter/memory cost.
         self.image_projection = conv_norm_act(in_channels, out_channels, 1)
-        self.wavelet = DecoderWaveletRefinement(out_channels, wavelet, kernels, dilations)
-        self.transformer = DeformableTransformer2D(in_channels, heads, points)
+        self.wavelet = (DecoderWaveletRefinement(out_channels, wavelet, kernels, dilations, wavelet_levels)
+                        if wavelet_levels else None)
+        self.transformer = DeformableTransformer2D(in_channels, heads, points) if diff_skip_channels else None
         # k=3,p=1,s=2 produces 2n-1 or 2n using output_size, matching ceil-downsampled encoders.
         # All channel adaptation is on the decoder path, never on encoder skips.
-        self.image_up_channels = nn.Conv2d(out_channels, image_skip_channels, 1)
-        self.diff_up = nn.ConvTranspose2d(in_channels, diff_skip_channels, 3, stride=2, padding=1)
+        self.image_up_channels = (nn.Conv2d(out_channels, image_skip_channels, 1) if wavelet_levels
+                                  else nn.ConvTranspose2d(out_channels, image_skip_channels, 3, stride=2, padding=1))
+        self.diff_up = nn.ConvTranspose2d(in_channels, diff_skip_channels, 3, stride=2, padding=1) if diff_skip_channels else None
         # Decoder processing AFTER raw feature addition bounds subsequent widths.
         self.image_refine = conv_norm_act(image_skip_channels, out_channels, 1)
-        self.diff_refine = conv_norm_act(diff_skip_channels, out_channels, 1)
-        self.fuse = conv_norm_act(2*out_channels, out_channels, 1)
+        self.diff_refine = conv_norm_act(diff_skip_channels, out_channels, 1) if diff_skip_channels else None
+        self.fuse = conv_norm_act(2*out_channels, out_channels, 1) if diff_skip_channels else None
 
     def forward(self, image, diff, image_skip, diff_skip):
-        size = image_skip.shape[-2:]
-        image = self.wavelet(self.image_projection(image))
-        image = F.interpolate(self.image_up_channels(image), size=size,
-                              mode='bilinear', align_corners=False)
+        image = self.image_projection(image)
+        if self.wavelet is None:
+            image = self.image_up_channels(image, output_size=image_skip.shape)
+        else:
+            image = F.interpolate(self.image_up_channels(self.wavelet(image)),
+                                  size=image_skip.shape[-2:], mode='bilinear', align_corners=False)
+        image = self.image_refine(image + image_skip)
+        if self.transformer is None:
+            return image, None
         diff = self.transformer(diff)
         diff = self.diff_up(diff, output_size=diff_skip.shape)
-        if image.shape != image_skip.shape or diff.shape != diff_skip.shape:
-            raise ValueError('Direct additive skips require identical B/C/H/W')
-        image = image + image_skip
-        diff = diff + diff_skip
-        image = self.image_refine(image)
-        diff = self.diff_refine(diff)
+        diff = self.diff_refine(diff + diff_skip)
         return self.fuse(torch.cat((image, diff), dim=1)), diff
 
 
 class WaveDe(nn.Module):
     def __init__(self, inChannel=1, outChannel=4, baseChannel=24,
                  wavelet='sym2', kernels: Sequence[int]=(3, 5, 7),
-                 dilations: Sequence[int]=(2, 2, 2), heads=4, points=4):
+                 dilations: Sequence[int]=(2, 2, 2), heads=4, points=4, *,
+                 slices=3, use_diff=True, wavelet_levels=2):
         super().__init__()
         if inChannel != 1 or outChannel < 2 or baseChannel < 8:
             raise ValueError('Requires inChannel=1, outChannel>=2, baseChannel>=8')
         if heads < 1 or baseChannel % heads or points < 1:
             raise ValueError('baseChannel must divide positive heads; points must be positive')
+        if slices not in (1, 3) or wavelet_levels not in (0, 1, 2, 3):
+            raise ValueError('Expected 1 or 3 slices and 0 to 3 wavelet levels')
+        self.slices = slices
         self.encoder_slice = ResNet50Encoder(1)
-        self.encoder_diff = MobileNetV2Encoder(in_channels=2)
+        self.encoder_diff = MobileNetV2Encoder(in_channels=2) if use_diff else None
         widths = tuple(baseChannel*k for k in (1, 2, 4, 8, 16))
-        channels, diff_channels = ResNet50Encoder.channels, MobileNetV2Encoder.channels
+        channels, diff_channels = ResNet50Encoder.channels, MobileNetV2Encoder.channels if use_diff else (0,) * 5
         # Preserve the original joint bottleneck, with an additional difference state.
-        self.bottleneck = conv_norm_act(3*channels[-1]+diff_channels[-1], widths[-1], 1)
-        self.diff_bottleneck = conv_norm_act(diff_channels[-1], widths[-1], 1)
-        self.decoder = nn.ModuleList([WaveDeDecoderBlock(widths[i+1], widths[i], 3*channels[i], diff_channels[i],
-            wavelet, kernels, dilations, heads, points) for i in (3, 2, 1, 0)])
-        self.final_wavelet = DecoderWaveletRefinement(widths[0], wavelet, kernels, dilations)
-        self.final_transformer = DeformableTransformer2D(widths[0], heads, points)
-        self.final_diff_up = nn.ConvTranspose2d(widths[0], widths[0], 3, stride=2, padding=1)
-        self.full_resolution = conv_norm_act(2*widths[0], widths[0])
+        self.bottleneck = conv_norm_act(slices*channels[-1]+diff_channels[-1], widths[-1], 1)
+        self.diff_bottleneck = conv_norm_act(diff_channels[-1], widths[-1], 1) if use_diff else None
+        self.decoder = nn.ModuleList([WaveDeDecoderBlock(widths[i+1], widths[i], slices*channels[i], diff_channels[i],
+            wavelet, kernels, dilations, heads, points, wavelet_levels) for i in (3, 2, 1, 0)])
+        self.final_wavelet = (DecoderWaveletRefinement(widths[0], wavelet, kernels, dilations, wavelet_levels)
+                              if wavelet_levels else None)
+        self.final_image_up = (None if wavelet_levels else
+                               nn.ConvTranspose2d(widths[0], widths[0], 3, stride=2, padding=1))
+        self.final_transformer = DeformableTransformer2D(widths[0], heads, points) if use_diff else None
+        self.final_diff_up = nn.ConvTranspose2d(widths[0], widths[0], 3, stride=2, padding=1) if use_diff else None
+        self.full_resolution = conv_norm_act((2 if use_diff else 1)*widths[0], widths[0])
         self.head = nn.Conv2d(widths[0], outChannel, 1)
 
     def forward(self, x):
-        if x.ndim == 5 and x.shape[1:3] == (1, 3):
+        if x.ndim == 5 and x.shape[1:3] == (1, self.slices):
             x = x[:, 0]
-        if x.ndim != 4 or x.shape[1] != 3:
-            raise ValueError('Expected [B,3,H,W] or [B,1,3,H,W]')
+        if x.ndim != 4 or x.shape[1] != self.slices:
+            raise ValueError(f'Expected {self.slices} slice channels')
         if not x.is_floating_point():
             raise TypeError('Input must be floating-point MRI intensities')
         if min(x.shape[-2:]) < 32:
             raise ValueError('Input H/W must be at least 32; training batch size 1 needs >=64')
         b, _, h, w = x.shape
-        difference = torch.cat((x[:, 1:2]-x[:, 0:1], x[:, 2:3]-x[:, 1:2]), dim=1)
-        encoded = self.encoder_slice(x.reshape(3*b, 1, h, w))
-        # Preserve previous/center/next channel order at every encoder level.
-        images = [f.reshape(b, 3*f.shape[1], *f.shape[-2:]) for f in encoded]
-        differences = self.encoder_diff(difference)
-        image = self.bottleneck(torch.cat((images[-1], differences[-1]), dim=1))
-        diff = self.diff_bottleneck(differences[-1])
+        encoded = self.encoder_slice(x.reshape(self.slices*b, 1, h, w))
+        images = [f.reshape(b, self.slices*f.shape[1], *f.shape[-2:]) for f in encoded]
+        differences, diff = (None,) * 5, None
+        bottleneck_features = [images[-1]]
+        if self.encoder_diff is not None:
+            if self.slices == 1:
+                difference = x.new_zeros((b, 2, h, w))
+            else:
+                difference = torch.cat((x[:, 1:2]-x[:, 0:1], x[:, 2:3]-x[:, 1:2]), dim=1)
+            differences = self.encoder_diff(difference)
+            bottleneck_features.append(differences[-1])
+            diff = self.diff_bottleneck(differences[-1])
+        image = self.bottleneck(torch.cat(bottleneck_features, dim=1))
         for block, i in zip(self.decoder, (3, 2, 1, 0)):
             image, diff = block(image, diff, images[i], differences[i])
-        image = F.interpolate(self.final_wavelet(image), size=(h, w),
-                              mode='bilinear', align_corners=False)
-        diff = self.final_transformer(diff)
-        diff = self.final_diff_up(diff, output_size=(b, diff.shape[1], h, w))
-        return self.head(self.full_resolution(torch.cat((image, diff), dim=1)))
+        if self.final_wavelet is None:
+            image = self.final_image_up(image, output_size=(h, w))
+        else:
+            image = F.interpolate(self.final_wavelet(image), size=(h, w),
+                                  mode='bilinear', align_corners=False)
+        if self.final_transformer is not None:
+            diff = self.final_transformer(diff)
+            diff = self.final_diff_up(diff, output_size=(h, w))
+            image = torch.cat((image, diff), dim=1)
+        return self.head(self.full_resolution(image))
 
     def freeze_encoder_batchnorm(self):
         """Call after model.train() if encoder BatchNorm statistics should be frozen."""
         for encoder in (self.encoder_slice, self.encoder_diff):
+            if encoder is None:
+                continue
             for module in encoder.modules():
                 if isinstance(module, nn.BatchNorm2d):
                     module.eval()

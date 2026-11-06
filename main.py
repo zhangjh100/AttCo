@@ -1,7 +1,7 @@
 import os
 import json
 from pathlib import Path
-from models.baselines import (MODEL_REGISTRY, build_model, validate_model_config,
+from models.baselines import (MODEL_REGISTRY, WAVE_MODELS, build_model, validate_model_config,
                               prediction_logits, segmentation_loss)
 from comparison_data import build_dataset
 from mnm_data import DATASETS, PROJECT_ROOT
@@ -154,7 +154,7 @@ def main():
         config = dict(vars(arg))
         config['input_dim'] = MODEL_REGISTRY[arg.modelname]
         config['initialization'] = ('checkpoint' if arg.pretrained else
-                                    'scratch (xavier_uniform_)' if arg.modelname in ('Wave', 'WaveDe', 'WaveFour')
+                                    'scratch (xavier_uniform_)' if arg.modelname in WAVE_MODELS
                                     else 'scratch (native constructor)')
         config['upstream'] = {p.parent.name: json.loads(p.read_text()) for p in (Path(__file__).resolve().parent / 'third_party').glob('*/UPSTREAM.json')}
         with open(os.path.join(save_dir, f'config_fold_{fold}.json'), 'w') as handle:
@@ -191,7 +191,7 @@ def main():
             print("Loaded pretrained model")
         else:
             print("Training from Scratch")
-            if arg.modelname in ('Wave','WaveDe','WaveFour'):
+            if arg.modelname in WAVE_MODELS:
                 init_weights(model)
         model = model.to(device)
         complexity = measure_complexity(

@@ -14,7 +14,7 @@ from comparison_data import build_dataset
 from mnm_data import DATASETS, PROJECT_ROOT, read_phase_image
 import transforms
 import metrics
-from main import MODEL_REGISTRY, build_model, validate_model_config
+from main import MODEL_REGISTRY, WAVE_MODELS, build_model, validate_model_config
 
 
 
@@ -70,6 +70,8 @@ def main():
     parser.add_argument('--cpu', action='store_true')
     parser.add_argument('--save_pred', action='store_true')
     parser.add_argument('--output_path', default='./test_predictions')
+    parser.add_argument('--csv_output_path', type=Path, default=None,
+                        help='Directory for both results CSVs (defaults to --output_path)')
     args = parser.parse_args()
     try:
         validate_model_config(args.modelname, args.base_channels, args.image_size, args.volume_size)
@@ -91,7 +93,7 @@ def main():
         size_key = 'volume_size' if MODEL_REGISTRY[args.modelname] == '3d' else 'image_size'
         if tuple(saved[size_key]) != tuple(getattr(args, size_key)):
             parser.error(f'Checkpoint configuration requires --{size_key} ' + ' '.join(map(str, saved[size_key])))
-        if args.modelname in ('Wave', 'WaveDe', 'WaveFour') and saved['base_channels'] != args.base_channels:
+        if args.modelname in WAVE_MODELS and saved['base_channels'] != args.base_channels:
             parser.error('Checkpoint configuration uses different base_channels')
     args.csv_path = args.csv_path or str(PROJECT_ROOT / DATASETS[args.dataname])
     num_classes = 5 if args.dataname == 'EMIDEC' else 4
@@ -114,7 +116,8 @@ def main():
     model.load_state_dict({(k[7:] if k.startswith('module.') else k): v for k, v in state.items()}, strict=True)
     model.to(device).eval()
     output_path = Path(args.output_path)
-    output_path.mkdir(parents=True, exist_ok=True)
+    if args.save_pred:
+        output_path.mkdir(parents=True, exist_ok=True)
     scores = metrics.ACDCVolumeDice(num_classes=num_classes)
     rows = []
     current_id, slices, seen = None, None, set()
@@ -178,8 +181,10 @@ def main():
     patient_results = patient_results_table(volume_results)
     if set(patient_results['patient_id']) != set(patients):
         raise ValueError('Patient results do not match the requested held-out patients')
-    volume_csv = output_path / f'test_results_fold_{args.fold}.csv'
-    patient_csv = output_path / f'patient_results_fold_{args.fold}.csv'
+    csv_output_path = args.csv_output_path or output_path
+    csv_output_path.mkdir(parents=True, exist_ok=True)
+    volume_csv = csv_output_path / f'test_results_fold_{args.fold}.csv'
+    patient_csv = csv_output_path / f'patient_results_fold_{args.fold}.csv'
     volume_results.to_csv(volume_csv, index=False, float_format='%.10f')
     patient_results.to_csv(patient_csv, index=False, float_format='%.10f')
     print('Patient-phase results:', volume_csv)

@@ -5,10 +5,24 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+WAVEDE_ABLATIONS = {
+    'WaveDe-SingleSlice': dict(slices=1),
+    'WaveDe-NoDiff': dict(use_diff=False),
+    'WaveDe-DWT1': dict(wavelet_levels=1),
+    'WaveDe-DWT3': dict(wavelet_levels=3),
+    'WaveDe-NoDWT': dict(wavelet_levels=0),
+    'WaveDe-NoDWT-NoDiff': dict(wavelet_levels=0, use_diff=False),
+}
+WAVE_MODELS = ('Wave', 'WaveDe', 'WaveFour', *WAVEDE_ABLATIONS)
+
 MODEL_REGISTRY = {name: dim for name, dim in (
     ('Wave', '2.5d'), ('WaveDe', '2.5d'), ('WaveFour', '2.5d'), ('Mamba-UNet', '2d'),
     ('EMCAD', '2d'), ('CASCADE', '2d'), ('EffiDec3D', '3d'),
     ('EfficientMedNeXt', '3d'), ('MT-UNet', '2d'), ('TransUNet', '2d'), ('U-Net', '2d'))}
+MODEL_REGISTRY.update({
+    name: '2d' if options.get('slices') == 1 else '2.5d'
+    for name, options in WAVEDE_ABLATIONS.items()
+})
 
 def validate_model_config(name, base_channels=16, image_size=(224,224), volume_size=(32,128,128)):
     if name not in MODEL_REGISTRY:
@@ -74,7 +88,10 @@ def segmentation_loss(criterion, output, target):
 
 def build_model(name,base_channels=16,image_size=(224,224),volume_size=(32,128,128),num_classes=4):
     validate_model_config(name,base_channels,image_size,volume_size)
-    if name in ('Wave','WaveDe','WaveFour'):
+    if name in WAVEDE_ABLATIONS:
+        from models.WaveDe_ACDC import WaveDe
+        return WaveDe(outChannel=num_classes, baseChannel=base_channels, **WAVEDE_ABLATIONS[name])
+    if name in WAVE_MODELS:
         module=importlib.import_module(f'models.{name}_ACDC')
         return getattr(module,name)(inChannel=1,outChannel=num_classes,baseChannel=base_channels)
     try:
