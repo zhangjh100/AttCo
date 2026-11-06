@@ -10,16 +10,46 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DATASETS = {'ACDC': 'ACDC_Training_5folds.csv', 'MnM': 'MnMs_Training_5folds.csv', 'EMIDEC': 'EMIDEC_Training_5folds.csv'}
 
 
+CACHE_METADATA = 'mnm_3d_metadata.csv'
+
+
+def extract_cine_frame(image, frame):
+    if image.GetDimension() != 4:
+        raise ValueError(f'Expected 4D MnM cine: {image.GetSize()}')
+    if not 0 <= frame < image.GetSize()[3]:
+        raise ValueError(f'ED/ES frame {frame} outside cine with {image.GetSize()[3]} frames')
+    return sitk.Extract(image, list(image.GetSize()[:3]) + [0], [0, 0, 0, frame])
+
+
+def find_cine_pair(root, patient, require_target=True):
+    roots = (root, root/'Training', root/'Training'/'Labeled', root/'Labeled')
+    matches = set()
+    for base in roots:
+        for folder in (base/patient, base):
+            for suffix in ('.nii', '.nii.gz'):
+                image = folder / f'{patient}_sa{suffix}'
+                mask = folder / f'{patient}_sa_gt{suffix}'
+                if image.is_file() and (mask.is_file() or not require_target):
+                    matches.add((image.resolve(), mask.resolve()))
+    if len(matches) != 1:
+        raise FileNotFoundError(f'Expected one MnM cine/mask pair for {patient} under {root}; found {len(matches)}')
+    return matches.pop()
+
+
+def read_header(path):
+    reader = sitk.ImageFileReader()
+    reader.SetFileName(str(path))
+    reader.ReadImageInformation()
+    if reader.GetDimension() != 3:
+        raise ValueError(f'Expected 3D cached MnM volume: {path}')
+    return reader
+
+
 def read_phase_image(record, mask=False):
     image = sitk.ReadImage(record['mask_path' if mask else 'image_path'])
     if record.get('cine_4d'):
-        if image.GetDimension() != 4:
-            raise ValueError(f'Expected 4D MnM cine: {image.GetSize()}')
-        frame = record['frame_index']
-        if not 0 <= frame < image.GetSize()[3]:
-            raise ValueError(f'ED/ES frame {frame} outside cine with {image.GetSize()[3]} frames')
-        image = sitk.Extract(image, list(image.GetSize()[:3]) + [0], [0, 0, 0, frame])
-    if mask and record.get('cine_4d'):
+        image = extract_cine_frame(image, record['frame_index'])
+    if mask and (record.get('cine_4d') or record.get('mnm_native_labels')):
         array = sitk.GetArrayFromImage(image)
         if not np.isin(array, (0, 1, 2, 3)).all():
             raise ValueError('MnM mask must use labels 0,1,2,3')
@@ -48,14 +78,18 @@ class MnMDataset(ACDCDataset):
         self.normalize, self.cache_size = normalize, cache_size
         self.require_target = mode != 'test' if require_target is None else require_target
         self._cache, self.volumes, self.slice_index = OrderedDict(), {}, []
-        metadata = Path(metadata_path) if metadata_path else PROJECT_ROOT / 'MnMs_metadata.csv'
+        root = Path(self.path_root)
+        cached = (root / CACHE_METADATA).is_file()
+        metadata = Path(metadata_path) if metadata_path else (
+            root / CACHE_METADATA if cached else PROJECT_ROOT / 'MnMs_metadata.csv')
+        if cached:
+            with (root / CACHE_METADATA).open(newline='', encoding='utf-8-sig') as handle:
+                cached_frames = {r['patient_id']: (int(r['ED']), int(r['ES'])) for r in csv.DictReader(handle)}
         with metadata.open(newline='', encoding='utf-8-sig') as handle:
             rows = list(csv.DictReader(handle))
         if len({r['patient_id'] for r in rows}) != len(rows):
             raise ValueError('Duplicate patient IDs in MnM metadata')
         rows = {r['patient_id']: r for r in rows}
-        root = Path(self.path_root)
-        roots = (root, root/'Training', root/'Training'/'Labeled', root/'Labeled')
         phases = (phases,) if isinstance(phases, str) else phases
         if not phases or any(p not in ('ED','ES') for p in phases):
             raise ValueError('phases must contain ED and/or ES')
@@ -63,24 +97,22 @@ class MnMDataset(ACDCDataset):
             if patient not in rows:
                 raise ValueError(f'Missing MnM ED/ES metadata for {patient}: {metadata}')
             row = rows[patient]
-            matches = []
-            for base in roots:
-                for folder in (base/patient, base):
-                    for suffix in ('.nii', '.nii.gz'):
-                        image = folder / f'{patient}_sa{suffix}'
-                        mask = folder / f'{patient}_sa_gt{suffix}'
-                        if image.is_file() and (mask.is_file() or not self.require_target):
-                            matches.append((image.resolve(), mask.resolve()))
-            matches = list(dict.fromkeys(matches))
-            if len(matches) != 1:
-                raise FileNotFoundError(f'Expected one MnM cine/mask pair for {patient} under {root}; found {len(matches)}')
-            image_path, mask_path = matches[0]
+            if cached:
+                if cached_frames.get(patient) != (int(row['ED']), int(row['ES'])):
+                    raise ValueError(f'MnM cached ED/ES frames do not match metadata for {patient}')
+            else:
+                image_path, mask_path = find_cine_pair(root, patient, self.require_target)
             for phase in dict.fromkeys(phases):
+                if cached:
+                    folder = root / patient
+                    image_path = folder / f'{patient}_{phase}.nii'
+                    mask_path = folder / f'{patient}_{phase}_gt.nii'
                 record = dict(patient_id=patient, phase=phase, frame_index=int(row[phase]),
-                              image_path=str(image_path), mask_path=str(mask_path), cine_4d=True)
-                image = read_phase_image(record)
+                              image_path=str(image_path), mask_path=str(mask_path), cine_4d=not cached,
+                              mnm_native_labels=True)
+                image = read_header(image_path) if cached else read_phase_image(record)
                 if self.require_target:
-                    mask = read_phase_image(record, mask=True)
+                    mask = read_header(mask_path) if cached else read_phase_image(record, mask=True)
                     for getter in ('GetSize','GetSpacing','GetOrigin','GetDirection'):
                         if not np.allclose(getattr(image,getter)(), getattr(mask,getter)()):
                             raise ValueError(f'MnM image/mask geometry mismatch: {patient}/{phase}')
