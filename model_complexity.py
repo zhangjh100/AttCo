@@ -39,11 +39,20 @@ def measure_complexity(model, shape, calculate_flops=True):
         result.update(status='unavailable', error='Install fvcore: pip install fvcore')
         return result
     modes = [(module, module.training) for module in model.modules()]
+    # MedNeXt-derived 3D models keep checkpointing enabled even in eval.
+    # Bypass its autograd functions during JIT tracing, then restore the flags.
+    checkpoint_flags = [(module, name, getattr(module, name))
+                        for module in model.modules()
+                        for name in ('outside_block_checkpointing',
+                                     'inside_block_checkpointing')
+                        if isinstance(getattr(module, name, None), bool)]
     parameter = next(model.parameters(), None)
     device = parameter.device if parameter is not None else torch.device('cpu')
     dtype = parameter.dtype if parameter is not None else torch.float32
     try:
         model.eval()
+        for module, name, _ in checkpoint_flags:
+            setattr(module, name, False)
         with torch.no_grad(), torch.random.fork_rng(
                 devices=[device.index] if device.type == 'cuda' else []):
             sample = torch.zeros(shape, device=device, dtype=dtype)
@@ -60,6 +69,8 @@ def measure_complexity(model, shape, calculate_flops=True):
     except Exception as exc:
         result.update(status='failed', error=f'{type(exc).__name__}: {exc}')
     finally:
+        for module, name, value in checkpoint_flags:
+            setattr(module, name, value)
         for module, training in modes:
             module.training = training
     return result

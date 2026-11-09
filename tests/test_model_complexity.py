@@ -39,6 +39,33 @@ class ComplexityTest(unittest.TestCase):
         self.assertIsNone(result['gflops'])
         self.assertIn('aten::sin', result['unsupported_ops'])
 
+    def test_3d_checkpoint_bypass_and_restore(self):
+        class Checkpointed(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.outside_block_checkpointing = True
+                self.inside_block_checkpointing = False
+                self.conv = nn.Conv3d(1, 2, 3, bias=False)
+
+            def forward(self, x):
+                if self.outside_block_checkpointing:
+                    raise RuntimeError('checkpoint path must not be traced')
+                return self.conv(x)
+
+        model = Checkpointed().train()
+        result = measure_complexity(model, (1, 1, 8, 8, 8))
+        self.assertEqual(result['status'], 'ok')
+        self.assertAlmostEqual(result['gflops'], 2 * 6 ** 3 * 27 / 1e9)
+        self.assertTrue(model.outside_block_checkpointing)
+        self.assertFalse(model.inside_block_checkpointing)
+        self.assertTrue(model.training)
+
+        model.conv = nn.Conv3d(3, 2, 3)
+        result = measure_complexity(model, (1, 1, 8, 8, 8))
+        self.assertEqual(result['status'], 'failed')
+        self.assertTrue(model.outside_block_checkpointing)
+        self.assertTrue(model.training)
+
     def test_failure_restores_training(self):
         class Broken(nn.Module):
             def forward(self, x):

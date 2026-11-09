@@ -33,6 +33,7 @@ Measure a model without loading any dataset or starting training:
 python model_complexity.py --modelname Wave --image_size 224 224 --output complexity_Wave.json
 python model_complexity.py --modelname WaveDe --device cuda:0
 python model_complexity.py --modelname EfficientMedNeXt --volume_size 32 128 128
+python model_complexity.py --modelname EffiDec3D --device cpu --volume_size 32 128 128 --output complexity_results/EffiDec3D.json
 ```
 
 Input batch size is always 1: `[1,3,H,W]` for Wave/WaveDe (three adjacent
@@ -45,6 +46,9 @@ Unsupported operations (e.g. FFT or custom CUDA operators) are listed in the JSO
 When present, `counted_gflops` is only a partial estimate and `gflops` is null.
 Even a successful trace uses fvcore's supported-op coverage, not a count of
 every scalar operation. The model's training/eval flags are restored afterwards.
+For MedNeXt-derived 3D models, block checkpointing is temporarily disabled
+during tracing to avoid checkpoint autograd/JIT conflicts, then restored even
+if tracing fails. This affects only the model instance being measured.
 
 Expected layout: `training/patient001/Info.cfg`, `patient001_frame01.nii.gz`
 and `patient001_frame01_gt.nii.gz` (frame numbers come from ED/ES in Info.cfg).
