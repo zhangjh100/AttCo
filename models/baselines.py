@@ -12,6 +12,8 @@ WAVEDE_ABLATIONS = {
     'WaveDe-DWT3': dict(wavelet_levels=3),
     'WaveDe-NoDWT': dict(wavelet_levels=0),
     'WaveDe-NoDWT-NoDiff': dict(wavelet_levels=0, use_diff=False),
+    'WaveDe-NoDeform': dict(use_deformable=False),
+    'WaveDe-RawNeighbors': dict(diff_input='neighbors'),
 }
 WAVE_MODELS = ('Wave', 'WaveDe', 'WaveFour', *WAVEDE_ABLATIONS)
 

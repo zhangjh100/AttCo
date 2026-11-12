@@ -142,13 +142,16 @@ class DeformableTransformer2D(nn.Module):
 
 class WaveDeDecoderBlock(nn.Module):
     def __init__(self, in_channels, out_channels, image_skip_channels, diff_skip_channels,
-                 wavelet, kernels, dilations, heads, points, wavelet_levels=2):
+                 wavelet, kernels, dilations, heads, points, wavelet_levels=2,
+                 use_deformable=True):
         super().__init__()
         # Project before wavelet processing to bound decoder parameter/memory cost.
         self.image_projection = conv_norm_act(in_channels, out_channels, 1)
         self.wavelet = (DecoderWaveletRefinement(out_channels, wavelet, kernels, dilations, wavelet_levels)
                         if wavelet_levels else None)
-        self.transformer = DeformableTransformer2D(in_channels, heads, points) if diff_skip_channels else None
+        self.transformer = ((DeformableTransformer2D(in_channels, heads, points)
+                             if use_deformable else conv_norm_act(in_channels, in_channels, 3))
+                            if diff_skip_channels else None)
         # k=3,p=1,s=2 produces 2n-1 or 2n using output_size, matching ceil-downsampled encoders.
         # All channel adaptation is on the decoder path, never on encoder skips.
         self.image_up_channels = (nn.Conv2d(out_channels, image_skip_channels, 1) if wavelet_levels
@@ -179,7 +182,8 @@ class WaveDe(nn.Module):
     def __init__(self, inChannel=1, outChannel=4, baseChannel=24,
                  wavelet='sym2', kernels: Sequence[int]=(3, 5, 7),
                  dilations: Sequence[int]=(2, 2, 2), heads=4, points=4, *,
-                 slices=3, use_diff=True, wavelet_levels=2):
+                 slices=3, use_diff=True, wavelet_levels=2,
+                 use_deformable=True, diff_input='difference'):
         super().__init__()
         if inChannel != 1 or outChannel < 2 or baseChannel < 8:
             raise ValueError('Requires inChannel=1, outChannel>=2, baseChannel>=8')
@@ -187,7 +191,12 @@ class WaveDe(nn.Module):
             raise ValueError('baseChannel must divide positive heads; points must be positive')
         if slices not in (1, 3) or wavelet_levels not in (0, 1, 2, 3):
             raise ValueError('Expected 1 or 3 slices and 0 to 3 wavelet levels')
+        if diff_input not in ('difference', 'neighbors'):
+            raise ValueError('diff_input must be difference or neighbors')
+        if diff_input == 'neighbors' and (slices != 3 or not use_diff):
+            raise ValueError('Neighbor input requires three slices and an auxiliary branch')
         self.slices = slices
+        self.diff_input = diff_input
         self.encoder_slice = ResNet50Encoder(1)
         self.encoder_diff = MobileNetV2Encoder(in_channels=2) if use_diff else None
         widths = tuple(baseChannel*k for k in (1, 2, 4, 8, 16))
@@ -196,12 +205,15 @@ class WaveDe(nn.Module):
         self.bottleneck = conv_norm_act(slices*channels[-1]+diff_channels[-1], widths[-1], 1)
         self.diff_bottleneck = conv_norm_act(diff_channels[-1], widths[-1], 1) if use_diff else None
         self.decoder = nn.ModuleList([WaveDeDecoderBlock(widths[i+1], widths[i], slices*channels[i], diff_channels[i],
-            wavelet, kernels, dilations, heads, points, wavelet_levels) for i in (3, 2, 1, 0)])
+            wavelet, kernels, dilations, heads, points, wavelet_levels,
+            use_deformable) for i in (3, 2, 1, 0)])
         self.final_wavelet = (DecoderWaveletRefinement(widths[0], wavelet, kernels, dilations, wavelet_levels)
                               if wavelet_levels else None)
         self.final_image_up = (None if wavelet_levels else
                                nn.ConvTranspose2d(widths[0], widths[0], 3, stride=2, padding=1))
-        self.final_transformer = DeformableTransformer2D(widths[0], heads, points) if use_diff else None
+        self.final_transformer = ((DeformableTransformer2D(widths[0], heads, points)
+                                   if use_deformable else conv_norm_act(widths[0], widths[0], 3))
+                                  if use_diff else None)
         self.final_diff_up = nn.ConvTranspose2d(widths[0], widths[0], 3, stride=2, padding=1) if use_diff else None
         self.full_resolution = conv_norm_act((2 if use_diff else 1)*widths[0], widths[0])
         self.head = nn.Conv2d(widths[0], outChannel, 1)
@@ -223,6 +235,8 @@ class WaveDe(nn.Module):
         if self.encoder_diff is not None:
             if self.slices == 1:
                 difference = x.new_zeros((b, 2, h, w))
+            elif self.diff_input == 'neighbors':
+                difference = torch.cat((x[:, 0:1], x[:, 2:3]), dim=1)
             else:
                 difference = torch.cat((x[:, 1:2]-x[:, 0:1], x[:, 2:3]-x[:, 1:2]), dim=1)
             differences = self.encoder_diff(difference)

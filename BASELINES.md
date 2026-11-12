@@ -1,5 +1,23 @@
 # ACDC 对比模型接入说明
 
+## WaveDe additional ablations
+
+- `WaveDe-NoDeform`: keeps the difference encoder, fusion, and two-level
+  wavelet decoder; replaces all five deformable Transformers with 3x3
+  Conv + GroupNorm + ReLU blocks. Parameter counts are not matched.
+- `WaveDe-RawNeighbors`: keeps the complete WaveDe architecture, replacing
+  auxiliary input `[center - previous, next - center]` with `[previous, next]`.
+
+Both names work with training, testing, and standalone complexity measurement,
+including ACDC (4 classes) and EMIDEC (5 classes). Existing variants are unchanged.
+
+```sh
+python main.py --dataname ACDC --path_image /path/to/ACDC --modelname WaveDe-NoDeform
+python main.py --dataname EMIDEC --path_image /path/to/EMIDEC --modelname WaveDe-RawNeighbors
+python model_complexity.py --modelname WaveDe-NoDeform --device cpu --output complexity_results/WaveDe-NoDeform.json
+python model_complexity.py --modelname WaveDe-RawNeighbors --device cpu --output complexity_results/WaveDe-RawNeighbors.json
+```
+
 ## MnM（M&Ms）数据集
 
 训练和评估入口支持 `--dataname MnM`（默认仍为 ACDC），模型和 2D / 2.5D / 3D 输入选择方式一致：
